@@ -129,42 +129,46 @@ public static class TranscriptFormatter
     // when it overlaps a system segment in time by a meaningful fraction AND their
     // texts largely match. Both signals are required so genuine simultaneous
     // speech ("You" talking over a remote speaker) is not discarded.
-    private const double BleedTimeOverlapFraction = 0.5;   // >=50% of mic seg overlaps
-    private const double BleedTextSimilarity = 0.6;        // >=60% token Jaccard
+    private const double BleedTextSimilarity = 0.6;        // >=60% of mic tokens echoed
+    // System echo can arrive shifted vs the mic (playback + capture latency), so
+    // widen the mic window when gathering overlapping system text.
+    private const int BleedTimeToleranceMs = 2000;
 
     private static bool IsSystemAudioBleed(
         TranscriptSegment micSeg,
         List<TranscriptSegment> systemSegments)
     {
-        var micDuration = Math.Max(1, micSeg.EndMs - micSeg.StartMs);
-        foreach (var sysSeg in systemSegments)
+        // Word-level segmentation makes mic and system segments fine-grained and
+        // time-MISALIGNED, so a single system segment rarely overlaps the mic
+        // segment enough on its own. Compare the mic text against the UNION of all
+        // system segments that overlap the mic segment's (tolerance-widened) span.
+        var windowStart = micSeg.StartMs - BleedTimeToleranceMs;
+        var windowEnd = micSeg.EndMs + BleedTimeToleranceMs;
+        var overlappingSystemText = string.Join(" ", systemSegments
+            .Where(s => CalculateOverlap(windowStart, windowEnd, s.StartMs, s.EndMs) > 0)
+            .Select(s => s.Text));
+        if (string.IsNullOrWhiteSpace(overlappingSystemText))
         {
-            var overlap = CalculateOverlap(
-                micSeg.StartMs, micSeg.EndMs, sysSeg.StartMs, sysSeg.EndMs);
-            if (overlap / micDuration < BleedTimeOverlapFraction)
-            {
-                continue;
-            }
-            if (TextSimilarity(micSeg.Text, sysSeg.Text) >= BleedTextSimilarity)
-            {
-                return true;
-            }
+            return false;
         }
-        return false;
+        // Use CONTAINMENT (fraction of the mic's tokens present in the system text),
+        // not symmetric Jaccard: the system window is much larger than one mic
+        // phrase, so Jaccard's union denominator would wrongly suppress the score
+        // even when the mic text is fully echoed.
+        return TextContainment(micSeg.Text, overlappingSystemText) >= BleedTextSimilarity;
     }
 
-    // Token-set Jaccard similarity: |A ∩ B| / |A ∪ B| over lowercased word tokens.
-    private static double TextSimilarity(string a, string b)
+    // Fraction of `inner`'s word tokens that also appear in `outer`.
+    private static double TextContainment(string inner, string outer)
     {
-        var tokensA = Tokenize(a);
-        var tokensB = Tokenize(b);
-        if (tokensA.Count == 0 || tokensB.Count == 0)
+        var innerTokens = Tokenize(inner);
+        if (innerTokens.Count == 0)
         {
             return 0;
         }
-        var intersection = tokensA.Count(tokensB.Contains);
-        var union = tokensA.Count + tokensB.Count - intersection;
-        return union == 0 ? 0 : (double)intersection / union;
+        var outerTokens = Tokenize(outer);
+        var present = innerTokens.Count(outerTokens.Contains);
+        return (double)present / innerTokens.Count;
     }
 
     private static HashSet<string> Tokenize(string text)
