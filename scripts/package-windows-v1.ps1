@@ -6,6 +6,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# The bundled-Python architecture follows the publish runtime. arm64 additionally
+# gets the parakeet-npu (Snapdragon Hexagon NPU) worker dependencies.
+switch ($Runtime) {
+    "win-x64"   { $pythonArch = "x64" }
+    "win-arm64" { $pythonArch = "arm64" }
+    default     { throw "Unsupported -Runtime '$Runtime' (expected win-x64 or win-arm64)." }
+}
+
 if ([string]::IsNullOrWhiteSpace($SentryDsn) -and -not [string]::IsNullOrWhiteSpace($env:SENTRY_DSN)) {
     $SentryDsn = $env:SENTRY_DSN
 }
@@ -70,7 +78,7 @@ Get-ChildItem -LiteralPath $publishDir -File -Recurse -ErrorAction SilentlyConti
     Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
     Remove-Item -Force
 
-& (Join-Path $PSScriptRoot "fetch-python-runtime.ps1") -DestinationParent $publishDir
+& (Join-Path $PSScriptRoot "fetch-python-runtime.ps1") -DestinationParent $publishDir -Arch $pythonArch
 if ($LASTEXITCODE -ne 0) {
     throw "fetch-python-runtime.ps1 exited with code $LASTEXITCODE"
 }
@@ -87,6 +95,18 @@ New-Item -ItemType Directory -Force -Path $siteTarget | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Bundled pip self-upgrade failed (exit $LASTEXITCODE)." }
 & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $workerRequirements
 if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of worker requirements failed (exit $LASTEXITCODE)." }
+
+# Snapdragon (arm64) builds bundle the parakeet-npu engine deps (onnxruntime-qnn,
+# onnx-asr). These are arm64-only wheels, so they only install into the arm64
+# bundle; the x64 build never sees them.
+if ($pythonArch -eq "arm64") {
+    $parakeetNpuRequirements = Join-Path $publishDir "worker\requirements-parakeet-npu.txt"
+    if (-not (Test-Path $parakeetNpuRequirements)) {
+        throw "Parakeet NPU requirements missing at $parakeetNpuRequirements after publish."
+    }
+    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $parakeetNpuRequirements
+    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of parakeet-npu requirements failed (exit $LASTEXITCODE)." }
+}
 
 Get-ChildItem -LiteralPath $siteTarget -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force

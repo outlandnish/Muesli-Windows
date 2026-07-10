@@ -10,7 +10,22 @@ on:
 
 jobs:
   package:
-    runs-on: blacksmith-4vcpu-windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x64: the shipped baseline, on the existing runner. Whisper + optional
+          # CUDA Parakeet. Unchanged from the single-arch pipeline.
+          - arch: x64
+            runtime: win-x64
+            runs_on: blacksmith-4vcpu-windows-2025
+          # arm64: Snapdragon build. Bundles the parakeet-v3-npu (Hexagon NPU)
+          # engine deps. Requires a native Windows-on-ARM runner because the
+          # onnxruntime-qnn wheels are arm64-only and can't be pip-installed on x64.
+          - arch: arm64
+            runtime: win-arm64
+            runs_on: windows-11-arm
+    runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: write
     env:
@@ -36,7 +51,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         shell: pwsh
-        run: .\scripts\package-windows-v1.ps1
+        run: .\scripts\package-windows-v1.ps1 -Runtime ${{ matrix.runtime }}
 
       - name: Smoke test packaged zip
         shell: pwsh
@@ -46,7 +61,7 @@ jobs:
         shell: pwsh
         run: |
           $hash = (Get-FileHash artifacts/velopack/Muesli-win-Setup.exe -Algorithm SHA256).Hash
-          "Muesli-win-Setup.exe SHA-256: $hash" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "Muesli-win-Setup.exe (${{ matrix.arch }}) SHA-256: $hash" | Out-File $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Read app version from csproj
         id: version
@@ -60,21 +75,36 @@ jobs:
       - name: Upload publish folder (contributor build)
         uses: actions/upload-artifact@v4
         with:
-          name: muesli-windows-v1-win-x64
-          path: publish/muesli-windows-win-x64/**
+          name: muesli-windows-v1-${{ matrix.runtime }}
+          path: publish/muesli-windows-${{ matrix.runtime }}/**
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Velopack artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
-          name: muesli-windows-velopack
+          name: muesli-windows-velopack-${{ matrix.arch }}
           path: |
             artifacts/velopack/Muesli-win-Setup.exe
             artifacts/velopack/*.nupkg
             artifacts/velopack/releases.win.json
           if-no-files-found: error
           retention-days: 30
+
+      # Both matrix legs attach to the same tag, and vpk emits arch-generic names
+      # (Muesli-win-Setup.exe, releases.win.json). Rename the installer per-arch so
+      # the x64 and arm64 legs don't overwrite each other on the draft release.
+      # NOTE for reviewers: a proper per-arch AUTO-UPDATE feed needs Velopack
+      # channels (`vpk pack --channel win-<arch>` + an arch-aware GithubSource in
+      # the updater). That's a follow-up; this step only prevents asset collision.
+      - name: Stage per-arch release assets
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        run: |
+          $rel = "artifacts/release-assets"
+          New-Item -ItemType Directory -Force -Path $rel | Out-Null
+          Copy-Item "artifacts/velopack/Muesli-win-Setup.exe" "$rel/Muesli-win-${{ matrix.arch }}-Setup.exe" -Force
+          Copy-Item "artifacts/muesli-windows-v1-${{ matrix.runtime }}.zip" "$rel/" -Force
 
       - name: Attach to draft GitHub Release
         if: ${{ inputs.publish_release }}
@@ -86,7 +116,5 @@ jobs:
           prerelease: false
           fail_on_unmatched_files: false
           files: |
-            artifacts/velopack/Muesli-win-Setup.exe
-            artifacts/velopack/*.nupkg
-            artifacts/velopack/releases.win.json
-            artifacts/muesli-windows-v1-win-x64.zip
+            artifacts/release-assets/Muesli-win-${{ matrix.arch }}-Setup.exe
+            artifacts/release-assets/muesli-windows-v1-${{ matrix.runtime }}.zip

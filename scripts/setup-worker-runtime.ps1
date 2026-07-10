@@ -1,6 +1,7 @@
 param(
     [switch]$WithPostProcessing,
     [switch]$WithParakeet,
+    [switch]$WithParakeetNpu,
     [switch]$WithDiarization,
     [switch]$CheckOnly
 )
@@ -17,6 +18,7 @@ if (Test-Path (Join-Path $root "Muesli.exe")) {
 $requirements = Join-Path $appDir "worker\requirements.txt"
 $postRequirements = Join-Path $appDir "worker\requirements-postprocess.txt"
 $parakeetRequirements = Join-Path $appDir "worker\requirements-parakeet.txt"
+$parakeetNpuRequirements = Join-Path $appDir "worker\requirements-parakeet-npu.txt"
 $diarizationRequirements = Join-Path $appDir "worker\requirements-diarization.txt"
 
 if (-not (Test-Path $requirements)) {
@@ -30,11 +32,15 @@ if ($useBundled) {
     $siteTarget = Join-Path $appDir "python\site-packages-muesli"
 
     if ($CheckOnly) {
-        & $bundledPython -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)"
+        # What matters for the bundled runtime is that it launches and is CPython
+        # 3.x; the exact minor version differs by arch (x64 and arm64 bundles pin
+        # different python-build-standalone releases) and isn't load-bearing.
+        & $bundledPython -c "import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)"
         if ($LASTEXITCODE -ne 0) {
-            throw "Bundled python at $bundledPython is not the expected 3.12 runtime."
+            throw "Bundled python at $bundledPython did not launch as a CPython 3.x runtime."
         }
-        Write-Host "Bundled CPython 3.12 runtime check passed at $bundledPython"
+        $reported = & $bundledPython -c "import sys, platform; print(f'{sys.version_info.major}.{sys.version_info.minor} {platform.machine()}')"
+        Write-Host "Bundled CPython $($reported.Trim()) runtime check passed at $bundledPython"
         return
     }
 
@@ -62,6 +68,20 @@ if ($useBundled) {
         }
         & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $parakeetRequirements
         if ($LASTEXITCODE -ne 0) { throw "pip install of Parakeet requirements failed (exit $LASTEXITCODE)." }
+    }
+
+    if ($WithParakeetNpu) {
+        if (-not (Test-Path $parakeetNpuRequirements)) {
+            throw "Could not find Parakeet NPU requirements at $parakeetNpuRequirements"
+        }
+        # onnxruntime-qnn ships arm64-only wheels; guard against installing into
+        # a non-arm64 bundle where the QNN DLLs can't load (Error 193).
+        & $bundledPython -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "The parakeet-npu engine requires a native ARM64 Python (Snapdragon). Bundled python at $bundledPython is not arm64."
+        }
+        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $parakeetNpuRequirements
+        if ($LASTEXITCODE -ne 0) { throw "pip install of Parakeet NPU requirements failed (exit $LASTEXITCODE)." }
     }
 
     if ($WithDiarization) {
@@ -145,6 +165,18 @@ if ($WithParakeet) {
         throw "Could not find Parakeet requirements at $parakeetRequirements"
     }
     & $python -m pip install -r $parakeetRequirements
+}
+
+if ($WithParakeetNpu) {
+    if (-not (Test-Path $parakeetNpuRequirements)) {
+        throw "Could not find Parakeet NPU requirements at $parakeetNpuRequirements"
+    }
+    # onnxruntime-qnn ships arm64-only wheels; require a native ARM64 interpreter.
+    & $python -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The parakeet-npu engine requires a native ARM64 Python (Snapdragon). $python is not arm64."
+    }
+    & $python -m pip install -r $parakeetNpuRequirements
 }
 
 if ($WithDiarization) {

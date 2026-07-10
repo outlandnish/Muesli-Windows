@@ -1,9 +1,11 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$DestinationParent,
-    [string]$Version = "3.12.11",
+    [ValidateSet("x64", "arm64")]
+    [string]$Arch = "x64",
+    [string]$Version = "",
     [string]$BuildStamp = "20250612",
-    [string]$ExpectedSha256 = "7b93afa91931dbc37b307a81b8680b30193736b5ef29a44ef6452f702c306e7a",
+    [string]$ExpectedSha256 = "",
     [switch]$Force
 )
 
@@ -13,7 +15,33 @@ if (-not (Test-Path $DestinationParent)) {
     throw "DestinationParent does not exist: $DestinationParent"
 }
 
-$assetName = "cpython-$Version+$BuildStamp-x86_64-pc-windows-msvc-install_only.tar.gz"
+# Per-arch defaults. The x64 runtime is CPython 3.12 (the shipped v1 baseline).
+# The arm64 runtime is CPython 3.13, required by the onnxruntime-qnn wheel used by
+# the parakeet-npu engine (Snapdragon NPU). Both are python-build-standalone
+# install_only tarballs from the same BuildStamp release, SHA-256 pinned.
+$archDefaults = @{
+    "x64"   = @{
+        Triple = "x86_64-pc-windows-msvc"
+        Version = "3.12.11"
+        Sha256 = "7b93afa91931dbc37b307a81b8680b30193736b5ef29a44ef6452f702c306e7a"
+    }
+    "arm64" = @{
+        Triple = "aarch64-pc-windows-msvc"
+        Version = "3.13.4"
+        # VERIFY: pin to the real SHA-256 of the aarch64 install_only tarball for
+        # this BuildStamp before shipping. Left blank so the build fails loud
+        # rather than silently trusting an unverified download.
+        Sha256 = ""
+    }
+}
+$defaults = $archDefaults[$Arch]
+if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $defaults.Version }
+if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) { $ExpectedSha256 = $defaults.Sha256 }
+if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+    throw "No pinned SHA-256 for the $Arch CPython $Version tarball. Pass -ExpectedSha256 or fill in archDefaults['$Arch'].Sha256."
+}
+
+$assetName = "cpython-$Version+$BuildStamp-$($defaults.Triple)-install_only.tar.gz"
 $downloadUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/$BuildStamp/$assetName"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
