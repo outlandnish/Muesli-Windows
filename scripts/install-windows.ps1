@@ -2,6 +2,8 @@ param(
     [string]$InstallDir = "$env:LOCALAPPDATA\Muesli",
     [switch]$WithPostProcessing,
     [switch]$WithParakeet,
+    [switch]$WithParakeetNpu,
+    [switch]$WithNpuSummary,
     [switch]$StartAtLogin,
     [switch]$NoDesktopShortcut
 )
@@ -26,15 +28,12 @@ Get-ChildItem -LiteralPath $source -Force |
 
 $setup = Join-Path $InstallDir "setup-worker-runtime.ps1"
 if (Test-Path $setup) {
-    if ($WithPostProcessing -and $WithParakeet) {
-        & powershell -ExecutionPolicy Bypass -File $setup -WithPostProcessing -WithParakeet
-    } elseif ($WithPostProcessing) {
-        & powershell -ExecutionPolicy Bypass -File $setup -WithPostProcessing
-    } elseif ($WithParakeet) {
-        & powershell -ExecutionPolicy Bypass -File $setup -WithParakeet
-    } else {
-        & powershell -ExecutionPolicy Bypass -File $setup
-    }
+    $setupArgs = @("-ExecutionPolicy", "Bypass", "-File", $setup)
+    if ($WithPostProcessing) { $setupArgs += "-WithPostProcessing" }
+    if ($WithParakeet)       { $setupArgs += "-WithParakeet" }
+    if ($WithParakeetNpu)    { $setupArgs += "-WithParakeetNpu" }
+    if ($WithNpuSummary)     { $setupArgs += "-WithNpuSummary" }
+    & powershell @setupArgs
 }
 
 $exe = Join-Path $InstallDir "Muesli.exe"

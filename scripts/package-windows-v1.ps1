@@ -73,10 +73,10 @@ foreach ($culture in $satelliteCultureDirs) {
 }
 
 Get-ChildItem -LiteralPath $publishDir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
-    Remove-Item -Recurse -Force
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath $publishDir -File -Recurse -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
-    Remove-Item -Force
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 & (Join-Path $PSScriptRoot "fetch-python-runtime.ps1") -DestinationParent $publishDir -Arch $pythonArch
 if ($LASTEXITCODE -ne 0) {
@@ -85,34 +85,42 @@ if ($LASTEXITCODE -ne 0) {
 
 $bundledPython = Join-Path $publishDir "python\python.exe"
 $siteTarget = Join-Path $publishDir "python\site-packages-muesli"
-$workerRequirements = Join-Path $publishDir "worker\requirements.txt"
-if (-not (Test-Path $workerRequirements)) {
-    throw "Worker requirements file missing at $workerRequirements after publish."
-}
 
 New-Item -ItemType Directory -Force -Path $siteTarget | Out-Null
 & $bundledPython -m pip install --upgrade pip --no-warn-script-location
 if ($LASTEXITCODE -ne 0) { throw "Bundled pip self-upgrade failed (exit $LASTEXITCODE)." }
-& $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $workerRequirements
-if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of worker requirements failed (exit $LASTEXITCODE)." }
 
-# Snapdragon (arm64) builds bundle the parakeet-npu engine deps (onnxruntime-qnn,
-# onnx-asr). These are arm64-only wheels, so they only install into the arm64
-# bundle; the x64 build never sees them.
 if ($pythonArch -eq "arm64") {
-    $parakeetNpuRequirements = Join-Path $publishDir "worker\requirements-parakeet-npu.txt"
-    if (-not (Test-Path $parakeetNpuRequirements)) {
-        throw "Parakeet NPU requirements missing at $parakeetNpuRequirements after publish."
+    # Snapdragon: Whisper's backend (ctranslate2) has NO win_arm64 wheel, so the
+    # x64 base requirements can't install here. The on-device ASR engine on arm64
+    # is parakeet-v3-npu (onnxruntime-qnn + onnx-asr, arm64-only wheels) — install
+    # that as the base, and the GenieX NPU summary deps. Whisper is unavailable on
+    # this build by design; the app defaults to the NPU engine.
+    foreach ($reqName in @("requirements-parakeet-npu.txt", "requirements-npu-summary.txt")) {
+        $req = Join-Path $publishDir "worker\$reqName"
+        if (-not (Test-Path $req)) { throw "Requirements file missing at $req after publish." }
+        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $req
+        if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of $reqName failed (exit $LASTEXITCODE)." }
     }
-    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $parakeetNpuRequirements
-    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of parakeet-npu requirements failed (exit $LASTEXITCODE)." }
+} else {
+    # x64: the shipped baseline — Whisper worker dependencies.
+    $workerRequirements = Join-Path $publishDir "worker\requirements.txt"
+    if (-not (Test-Path $workerRequirements)) {
+        throw "Worker requirements file missing at $workerRequirements after publish."
+    }
+    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $workerRequirements
+    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of worker requirements failed (exit $LASTEXITCODE)." }
 }
 
+# -ErrorAction SilentlyContinue on the removal too: enumeration and deletion race
+# (a .pyc can vanish between listing and Remove-Item), and with $ErrorActionPreference
+# = "Stop" an unguarded failure here would abort the whole package. This cleanup is
+# best-effort and must never be fatal.
 Get-ChildItem -LiteralPath $siteTarget -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
-    Remove-Item -Recurse -Force
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath $siteTarget -File -Recurse -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
-    Remove-Item -Force
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 $readme = @"
 Muesli for Windows v1
