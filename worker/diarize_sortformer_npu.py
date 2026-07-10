@@ -157,8 +157,20 @@ def _ensure_qnn_registered():
     import onnxruntime as ort
     import onnxruntime_qnn as _qnn
 
-    ort.register_execution_provider_library(_QNN_EP, _qnn.get_library_path())
     _qnn_htp_path = _qnn.get_qnn_htp_path()
+    # The EP library is registered PROCESS-WIDE, so another module (e.g. the
+    # parakeet-v3-npu ASR engine) may have already registered it under the same
+    # name — re-registering throws "library is already registered". Treat that as
+    # success: what matters is that QNNExecutionProvider is available, not who
+    # registered it. Without this, the double-register exception was silently
+    # swallowed and we fell back to CPU even though the NPU was usable.
+    try:
+        ort.register_execution_provider_library(_QNN_EP, _qnn.get_library_path())
+    except Exception as exc:
+        already = "already registered" in str(exc).lower()
+        registered_now = any(d.ep_name == _QNN_EP for d in ort.get_ep_devices())
+        if not (already or registered_now):
+            raise
     _qnn_registered = True
 
 
