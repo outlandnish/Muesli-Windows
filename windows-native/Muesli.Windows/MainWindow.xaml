@@ -917,6 +917,8 @@
                   <Run Text="{Binding QwenRuntimeStatus, Mode=OneWay}" />
                   <Run Text=" • Parakeet " />
                   <Run Text="{Binding ParakeetRuntimeStatus, Mode=OneWay}" />
+                  <Run Text=" • Parakeet NPU " />
+                  <Run Text="{Binding NpuRuntimeStatus, Mode=OneWay}" />
                 </TextBlock>
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                   <Button Style="{StaticResource SecondaryButton}" Content="Check setup" Click="RefreshRuntimeDiagnostics_Click" />
@@ -1003,6 +1005,39 @@
               </StackPanel>
               <Border Grid.Column="1" Height="28" Padding="10,0" CornerRadius="5" Background="{DynamicResource SuccessBadgeBackgroundBrush}" VerticalAlignment="Top">
                 <TextBlock Text="{Binding ParakeetStatusLabel}" VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource SuccessGreenBrush}" />
+              </Border>
+            </Grid>
+          </Border>
+
+          <Border Style="{StaticResource ContentCard}" BorderBrush="#806BA3F7" BorderThickness="1.5">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="Parakeet v3 (NPU)" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                  <Border Margin="10,0,0,0" Padding="8,3" CornerRadius="5" Background="{DynamicResource AccentBadgeBackgroundBrush}">
+                    <TextBlock Text="Snapdragon NPU" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource AccentBlueBrush}" />
+                  </Border>
+                </StackPanel>
+                <TextBlock Text="Runs the Parakeet v3 encoder on the Qualcomm Hexagon NPU — fully on-device, fast, and low-power." Margin="0,8,0,12" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                  <TextBlock Text="Backend" Width="72" VerticalAlignment="Center" FontSize="13" Foreground="{DynamicResource TextTertiaryBrush}" />
+                  <Border Width="190" Height="36" Background="{DynamicResource SurfacePrimaryBrush}" CornerRadius="6">
+                    <TextBlock Text="{Binding NpuRuntimeStatus, Mode=OneWay}" Margin="12,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                  </Border>
+                  <TextBlock Text="~450 MB" Margin="120,0,0,0" VerticalAlignment="Center" FontSize="13" Foreground="{DynamicResource TextTertiaryBrush}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                  <Button Style="{StaticResource PrimaryButton}" Content="Set Active" Click="SetParakeetNpuActive_Click" />
+                  <Button Margin="10,0,0,0" Style="{StaticResource SecondaryButton}" Content="Test Parakeet (NPU)" Click="TestParakeetNpu_Click" />
+                </StackPanel>
+                <TextBlock Text="Requires a Snapdragon X device (Windows on ARM) with a Hexagon NPU. Validated on Snapdragon X Elite; other Snapdragon X SoCs are attempted and fall back safely if unsupported." FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+              </StackPanel>
+              <Border Grid.Column="1" Height="28" Padding="10,0" CornerRadius="5" Background="{DynamicResource SuccessBadgeBackgroundBrush}" VerticalAlignment="Top">
+                <TextBlock Text="{Binding ParakeetNpuStatusLabel}" VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource SuccessGreenBrush}" />
               </Border>
             </Grid>
           </Border>

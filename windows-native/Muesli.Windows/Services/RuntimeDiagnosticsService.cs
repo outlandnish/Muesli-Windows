@@ -33,6 +33,16 @@ public sealed class RuntimeDiagnosticsService
             python,
             "-c \"import torch; print('CUDA available' if torch.cuda.is_available() else 'CUDA not available')\"",
             TimeSpan.FromSeconds(12));
+        // Qualcomm Hexagon NPU probe for the parakeet-v3-npu engine. Reports the
+        // SoC support tier (verified/elite-untested/plus-untested/unknown) or a
+        // clear 'no NPU' line. Runs from the worker dir so parakeet_npu imports.
+        var workerDir = Path.GetDirectoryName(WorkerRuntimeLocator.FindWorkerScriptOrNull() ?? "") ?? "";
+        var npuCheck = await RunProcessAsync(
+            python,
+            "-c \"import sys; sys.path.insert(0, r'" + workerDir + "'); "
+            + "from parakeet_npu.asr import qnn_npu_available, qnn_soc_support; "
+            + "print((qnn_soc_support()['tier'] + ' | ' + qnn_soc_support()['note']) if qnn_npu_available() else 'No Qualcomm NPU detected')\"",
+            TimeSpan.FromSeconds(12));
         var diarizationCheck = await RunProcessAsync(
             python,
             "-c \"import numpy as np; np.NaN = np.nan if not hasattr(np, 'NaN') else np.NaN; np.NAN = np.nan if not hasattr(np, 'NAN') else np.NAN; import torchaudio; torchaudio.set_audio_backend = lambda x: None; import pyannote.audio; import soundfile; import torch; print('OK - pyannote diarization dependencies installed.')\"",
@@ -60,6 +70,7 @@ public sealed class RuntimeDiagnosticsService
             NormalizeOutput(postProcessCheck),
             NormalizeOutput(parakeetCheck),
             NormalizeOutput(cudaCheck),
+            NormalizeOutput(npuCheck),
             NormalizeOutput(diarizationCheck),
             tokenStatus,
             workerPath ?? "worker/transcribe_worker.py not found",
@@ -290,6 +301,7 @@ public sealed record RuntimeDiagnostics(
     string PostProcessingDependencyStatus,
     string ParakeetDependencyStatus,
     string CudaStatus,
+    string NpuStatus,
     string DiarizationDependencyStatus,
     string DiarizationTokenStatus,
     string WorkerScript,
@@ -312,6 +324,7 @@ public sealed record RuntimeDiagnostics(
         $"Qwen dependencies: {PostProcessingDependencyStatus}{Environment.NewLine}" +
         $"Parakeet dependencies: {ParakeetDependencyStatus}{Environment.NewLine}" +
         $"GPU: {CudaStatus}{Environment.NewLine}" +
+        $"NPU: {NpuStatus}{Environment.NewLine}" +
         $"Diarization dependencies: {DiarizationDependencyStatus}{Environment.NewLine}" +
         $"Diarization token: {DiarizationTokenStatus}{Environment.NewLine}" +
         $"Worker: {WorkerScript}{Environment.NewLine}" +
