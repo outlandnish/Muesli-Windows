@@ -817,7 +817,21 @@ def diarize_audio(input_path: str) -> dict[str, Any]:
         }
     except ModuleNotFoundError as exc:
         # pyannote.audio / torch has no win_arm64 wheel. On arm64 (Snapdragon)
-        # builds, fall back to the sherpa-onnx CPU diarizer when it's available.
+        # builds, prefer the Sortformer NPU diarizer (end-to-end, all-on-device,
+        # ~176 ms/chunk on the Hexagon NPU) when its models + an NPU are present;
+        # otherwise fall back to the sherpa-onnx CPU diarizer.
+        try:
+            import diarize_sortformer_npu as sortformer
+
+            if sortformer.sortformer_available(cache_dir()):
+                result = sortformer.diarize_audio_sortformer(input_path, cache_dir())
+                result.setdefault("warnings", []).insert(
+                    0, f"Diarization: pyannote unavailable ({exc}); using Sortformer (NPU)."
+                )
+                return result
+        except ModuleNotFoundError:
+            pass  # backend deps (numpy/onnxruntime) absent; try sherpa next
+
         import diarize_sherpa
 
         if diarize_sherpa.sherpa_available():
@@ -830,7 +844,8 @@ def diarize_audio(input_path: str) -> dict[str, Any]:
         warnings += [
             "Diarization skipped: pyannote.audio not installed.",
             "On x64: pip install -r requirements-diarization.txt",
-            "On arm64: pip install -r requirements-diarize-sherpa.txt + sherpa wheel",
+            "On arm64: pip install -r requirements-diarize-sherpa.txt + sherpa wheel,",
+            "  or requirements-diarize-sortformer-npu.txt for NPU diarization.",
             f"Error: {exc}",
         ]
         return {
@@ -900,6 +915,61 @@ def fetch_sherpa_diarization_models(cache_dir_path: Path) -> list[str]:
     else:
         logs.append("Embedding model already present.")
 
+    return logs
+
+
+# NVIDIA Sortformer streaming diarizer, ONNX export by cgus/Altunenes.
+SORTFORMER_HF_REPO = "cgus/diar_streaming_sortformer_4spk-v2.1-onnx"
+SORTFORMER_HF_FILE = "diar_streaming_sortformer_4spk-v2.1.onnx"  # HF filename; saved locally as sortformer.onnx
+
+
+def fetch_sortformer_diarization_models(cache_dir_path: Path) -> list[str]:
+    """Download the Sortformer float ONNX into cache_dir/diarize-sortformer/.
+
+    The compiled QNN context binary (sortformer.bin) is bundled with the arm64
+    package (or produced by the AI Hub compile flow) and copied in separately;
+    if only the ONNX is present, the backend runs it on the CPU as a fallback.
+    Returns diagnostic lines. Idempotent: skips files already present.
+    """
+    import diarize_sortformer_npu as sortformer
+
+    out = sortformer.sortformer_model_dir(cache_dir_path)
+    logs: list[str] = []
+    onnx_path = out / "sortformer.onnx"
+
+    if not onnx_path.is_file():
+        from huggingface_hub import hf_hub_download
+
+        src = hf_hub_download(SORTFORMER_HF_REPO, SORTFORMER_HF_FILE)
+        import shutil
+
+        shutil.copyfile(src, onnx_path)
+        logs.append(f"Downloaded Sortformer ONNX -> {onnx_path.name}")
+    else:
+        logs.append("Sortformer ONNX already present.")
+
+    # The pre-compiled QNN context binary (sortformer.bin) is bundled with the arm64
+    # package under worker\sortformer-bin\. Copy it into the model cache if present,
+    # then (re)generate the tiny EPContext wrapper ORT-QNN needs to load it
+    # (deterministic, safe to regenerate). Without the .bin we run the float ONNX on
+    # the CPU as a fallback.
+    bin_path = out / "sortformer.bin"
+    if not bin_path.is_file():
+        bundled = Path(__file__).resolve().parent / "sortformer-bin" / "sortformer.bin"
+        if bundled.is_file():
+            import shutil
+
+            shutil.copyfile(bundled, bin_path)
+            logs.append(f"Copied bundled Sortformer NPU binary -> {bin_path.name}")
+
+    if bin_path.is_file():
+        wrap = sortformer.generate_epcontext_wrapper(cache_dir_path)
+        logs.append(f"NPU context binary present; generated wrapper -> {wrap.name}")
+    else:
+        logs.append(
+            "No QNN context binary (sortformer.bin) present; will run the float "
+            "ONNX on the CPU. Bundle sortformer.bin for NPU acceleration."
+        )
     return logs
 
 
@@ -994,6 +1064,28 @@ def download_model(kind: str, model: str) -> dict[str, Any]:
                 "Segmentation: sherpa-onnx-pyannote-segmentation-3-0",
                 "Embedding: 3dspeaker eres2net_base_sv 16k",
                 f"Model cache directory: {diarize_sherpa.sherpa_model_dir(cache_dir())}",
+                *fetched,
+                f"Timing model ready ms: {(time.perf_counter() - started_at) * 1000:.1f}",
+            ],
+        }
+
+    if kind == "diarize-sortformer-npu":
+        # NVIDIA Sortformer end-to-end diarizer for the arm64 / Snapdragon NPU.
+        import diarize_sortformer_npu as sortformer
+
+        fetched = fetch_sortformer_diarization_models(cache_dir())
+        model_dir = sortformer.sortformer_model_dir(cache_dir())
+        has_bin = sortformer._binary_path(cache_dir()) is not None
+        return {
+            "transcriptText": "Sortformer diarization models are ready.",
+            "detectedLanguage": "en",
+            "durationMs": 0,
+            "segments": [],
+            "warnings": [
+                "Diarization backend: Sortformer / QNN Hexagon NPU (ARM64)",
+                "Model: diar_streaming_sortformer_4spk-v2.1 (4-speaker, end-to-end)",
+                f"NPU context binary present: {has_bin}",
+                f"Model cache directory: {model_dir}",
                 *fetched,
                 f"Timing model ready ms: {(time.perf_counter() - started_at) * 1000:.1f}",
             ],

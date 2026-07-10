@@ -5,7 +5,12 @@ param(
     # Path to the self-built sherpa-onnx arm64 wheel to bundle for CPU speaker
     # diarization (no PyPI arm64 wheel exists). Defaults to worker\wheels\ in the
     # repo. Only used for -Runtime win-arm64. Env override: MUESLI_SHERPA_WHEEL.
-    [string]$SherpaWheel = ""
+    [string]$SherpaWheel = "",
+    # Path to the pre-compiled Sortformer QNN context binary (sortformer.bin) to
+    # bundle for NPU speaker diarization. Only used for -Runtime win-arm64. If unset,
+    # the bundle ships without it and diarization uses the sherpa CPU fallback until
+    # the .bin is added. Env override: MUESLI_SORTFORMER_BIN.
+    [string]$SortformerBin = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,6 +135,31 @@ if ($pythonArch -eq "arm64") {
     if (-not (Test-Path $sherpaReq)) { throw "Requirements file missing at $sherpaReq after publish." }
     & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $sherpaReq
     if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of requirements-diarize-sherpa.txt failed (exit $LASTEXITCODE)." }
+
+    # NPU speaker diarization via NVIDIA Sortformer. Deps are onnxruntime-qnn (already
+    # installed above for parakeet-npu) + numpy/scipy/huggingface_hub; install the req
+    # explicitly so the bundle ships it ready. The pre-compiled QNN context binary
+    # (sortformer.bin) is bundled into the model cache under worker\models\ when
+    # available (pass -SortformerBin or set MUESLI_SORTFORMER_BIN); the tiny EPContext
+    # wrapper is generated on first download_model(kind="diarize-sortformer-npu").
+    $sortformerReq = Join-Path $publishDir "worker\requirements-diarize-sortformer-npu.txt"
+    if (-not (Test-Path $sortformerReq)) { throw "Requirements file missing at $sortformerReq after publish." }
+    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $sortformerReq
+    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of requirements-diarize-sortformer-npu.txt failed (exit $LASTEXITCODE)." }
+
+    $sortformerBinSrc = $SortformerBin
+    if ([string]::IsNullOrWhiteSpace($sortformerBinSrc)) { $sortformerBinSrc = $env:MUESLI_SORTFORMER_BIN }
+    if (-not [string]::IsNullOrWhiteSpace($sortformerBinSrc) -and (Test-Path $sortformerBinSrc)) {
+        # Bundle under worker\ (copied into the build); download_model(kind=
+        # "diarize-sortformer-npu") copies it into cache_dir()/diarize-sortformer/ and
+        # generates the EPContext wrapper on first run.
+        $sortformerBundleDir = Join-Path $publishDir "worker\sortformer-bin"
+        New-Item -ItemType Directory -Force -Path $sortformerBundleDir | Out-Null
+        Copy-Item -LiteralPath $sortformerBinSrc -Destination (Join-Path $sortformerBundleDir "sortformer.bin") -Force
+        Write-Host "Bundled Sortformer NPU context binary from $sortformerBinSrc"
+    } else {
+        Write-Host "NOTE: no Sortformer NPU binary bundled (pass -SortformerBin or set MUESLI_SORTFORMER_BIN). Diarization will use the sherpa CPU fallback until the .bin is present."
+    }
 } else {
     # x64: the shipped baseline — Whisper worker dependencies.
     $workerRequirements = Join-Path $publishDir "worker\requirements.txt"

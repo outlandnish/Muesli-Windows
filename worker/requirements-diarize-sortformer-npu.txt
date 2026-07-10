@@ -1,0 +1,18 @@
+# Speaker diarization on the Qualcomm Hexagon NPU via NVIDIA Sortformer —
+# Snapdragon X build. End-to-end 4-speaker diarizer (VAD + speaker-change +
+# overlap + attribution in ONE model), run as a compiled QNN context binary.
+#
+# HARD REQUIREMENT: a native ARM64 Python (win_arm64). onnxruntime-qnn ships
+# ARM64-only wheels and needs a native ARM64 interpreter to load the QNN HTP
+# libraries (an x64/emulated interpreter cannot). Runs alongside Parakeet-on-NPU
+# ASR + GenieX NPU summary, all on the Hexagon NPU.
+#
+# The compiled context binary (sortformer.bin) is BUNDLED with the arm64 package
+# or produced via the Qualcomm AI Hub compile flow; the float ONNX fallback is
+# fetched from HF (cgus/diar_streaming_sortformer_4spk-v2.1-onnx).
+onnxruntime-qnn
+numpy
+scipy
+huggingface_hub
+# soundfile is used if present (matches the sherpa/pyannote backends) but is
+# optional — the backend falls back to scipy.io.wavfile.

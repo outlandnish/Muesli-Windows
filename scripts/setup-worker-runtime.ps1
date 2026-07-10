@@ -5,6 +5,7 @@ param(
     [switch]$WithNpuSummary,
     [switch]$WithDiarization,
     [switch]$WithDiarizeSherpa,
+    [switch]$WithDiarizeSortformerNpu,
     [switch]$CheckOnly
 )
 
@@ -24,6 +25,7 @@ $parakeetNpuRequirements = Join-Path $appDir "worker\requirements-parakeet-npu.t
 $npuSummaryRequirements = Join-Path $appDir "worker\requirements-npu-summary.txt"
 $diarizationRequirements = Join-Path $appDir "worker\requirements-diarization.txt"
 $diarizeSherpaRequirements = Join-Path $appDir "worker\requirements-diarize-sherpa.txt"
+$diarizeSortformerNpuRequirements = Join-Path $appDir "worker\requirements-diarize-sortformer-npu.txt"
 # The self-built sherpa-onnx arm64 wheel (no PyPI arm64 wheel exists), bundled
 # under worker\wheels\ by package-windows-v1.ps1's arm64 path.
 $sherpaWheelDir = Join-Path $appDir "worker\wheels"
@@ -131,6 +133,20 @@ if ($useBundled) {
         if ($LASTEXITCODE -ne 0) { throw "pip install of bundled sherpa-onnx wheel failed (exit $LASTEXITCODE)." }
         & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $diarizeSherpaRequirements
         if ($LASTEXITCODE -ne 0) { throw "pip install of sherpa diarization requirements failed (exit $LASTEXITCODE)." }
+    }
+
+    if ($WithDiarizeSortformerNpu) {
+        if (-not (Test-Path $diarizeSortformerNpuRequirements)) {
+            throw "Could not find Sortformer NPU diarization requirements at $diarizeSortformerNpuRequirements"
+        }
+        # onnxruntime-qnn ships arm64-only wheels and needs a native ARM64 Python to
+        # load the QNN HTP libraries (an x64/emulated interpreter cannot).
+        & $bundledPython -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "The Sortformer NPU diarization backend requires a native ARM64 Python (Snapdragon). Bundled python at $bundledPython is not arm64."
+        }
+        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $diarizeSortformerNpuRequirements
+        if ($LASTEXITCODE -ne 0) { throw "pip install of Sortformer NPU diarization requirements failed (exit $LASTEXITCODE)." }
     }
 
     Write-Host "Muesli worker runtime is ready (bundled CPython) at $bundledPython"
