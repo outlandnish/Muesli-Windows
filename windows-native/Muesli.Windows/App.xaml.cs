@@ -102,6 +102,9 @@ public partial class App : System.Windows.Application
 
         Exit += (_, _) =>
         {
+            // Stop any GenieX LLM server this app started (leaves a user-started
+            // one alone). Best-effort; never let shutdown throw.
+            try { Services.MeetingSummaryService.ShutdownGenieX(); } catch { }
             _sentryDisposable?.Dispose();
         };
 

@@ -1,0 +1,8 @@
+# On-device LLM meeting summaries on the Qualcomm NPU via GenieX.
+# GenieX (BSD-3-Clause, https://github.com/qualcomm/GenieX) exposes an
+# OpenAI-compatible server at http://127.0.0.1:18181/v1; the app's GenieXService
+# starts/reuses it and pulls the summary model on first use.
+#
+# Installs geniex.exe into the bundled runtime's Scripts dir. Snapdragon (arm64)
+# only — same hardware requirement as the parakeet-v3-npu ASR engine.
+geniex
