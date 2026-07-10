@@ -108,6 +108,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _gpuRuntimeStatus = "Not checked";
     private string _qwenRuntimeStatus = "Not checked";
     private string _parakeetRuntimeStatus = "Not checked";
+    private string _npuRuntimeStatus = "Not checked";
     private string _diarizationDependencyStatus = "Not checked yet.";
     private string _diarizationTokenStatus = "Not checked yet.";
     private string _meetingDetectionStatus = "Meeting detection has not scanned yet.";
@@ -133,7 +134,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public ObservableCollection<DictionaryEntryItem> DictionaryEntries { get; } = [];
     public ObservableCollection<UpcomingMeetingItem> UpcomingMeetings { get; } = [];
     public ObservableCollection<string> MicrophoneDevices { get; } = ["System default microphone"];
-    public ObservableCollection<string> AsrEngines { get; } = ["whisper", "parakeet-v3"];
+    public ObservableCollection<string> AsrEngines { get; } = ["whisper", "parakeet-v3", "parakeet-v3-npu"];
     public ObservableCollection<string> ModelProfiles { get; } = ["tiny", "base", "small", "medium", "large-v3-turbo"];
     public ObservableCollection<string> HotkeyOptions { get; } =
     [
@@ -240,9 +241,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
     public string MeetingRecordingButtonText => _isMeetingRecording ? "Stop recording" : "Record meeting";
-    public string ActiveModelLabel => SelectedAsrEngine == "parakeet-v3" ? "Parakeet v3" : $"Whisper {SelectedModelProfile}";
+    public string ActiveModelLabel => SelectedAsrEngine switch
+    {
+        "parakeet-v3" => "Parakeet v3",
+        "parakeet-v3-npu" => "Parakeet v3 (NPU)",
+        _ => $"Whisper {SelectedModelProfile}",
+    };
     public string WhisperStatusLabel => SelectedAsrEngine == "whisper" ? "Active" : "Downloaded";
     public string ParakeetStatusLabel => SelectedAsrEngine == "parakeet-v3" ? "Active" : "Optional";
+    public string ParakeetNpuStatusLabel => SelectedAsrEngine == "parakeet-v3-npu" ? "Active" : "Optional";
     public string ShortcutModeLabel => EnableDoubleTapDictation ? "Hold to talk, or double-tap to lock recording" : "Hold to record, release to transcribe";
     public string CaptureHotkeyButtonText => _isCapturingHotkey ? "Press shortcut..." : "Record shortcut";
     public string ShortcutCaptureLabel => _isCapturingHotkey
@@ -307,6 +314,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         get => _parakeetRuntimeStatus;
         private set => SetField(ref _parakeetRuntimeStatus, value);
+    }
+    public string NpuRuntimeStatus
+    {
+        get => _npuRuntimeStatus;
+        private set => SetField(ref _npuRuntimeStatus, value);
     }
     public string ModelCacheDirectory
     {
@@ -403,6 +415,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 OnPropertyChanged(nameof(ActiveModelLabel));
                 OnPropertyChanged(nameof(WhisperStatusLabel));
                 OnPropertyChanged(nameof(ParakeetStatusLabel));
+                OnPropertyChanged(nameof(ParakeetNpuStatusLabel));
             }
         }
     }
@@ -2738,6 +2751,34 @@ private async void TestParakeet_Click(object sender, RoutedEventArgs e)
         _toastNotificationService.Show(toastTitle, exception.Message, ToastState.Error, 6200);
     }
 }
+private void SetParakeetNpuActive_Click(object sender, RoutedEventArgs e)
+{
+    SelectedAsrEngine = "parakeet-v3-npu";
+    DictationStatus = "Parakeet (NPU) selected";
+    _toastNotificationService.Show("Parakeet (NPU) selected", "Snapdragon Hexagon NPU backend. Download the model before first use.", ToastState.Success, 3600);
+}
+private async void TestParakeetNpu_Click(object sender, RoutedEventArgs e)
+{
+    try
+    {
+        DictationStatus = "Testing Parakeet NPU runtime";
+        _toastNotificationService.Show("Testing Parakeet (NPU)", "Checking Qualcomm Hexagon NPU backend", ToastState.Transcribing, 0);
+        var result = await _meetingTranscriptionClient.DownloadModelAsync("parakeet-v3-npu", "parakeet-v3-npu");
+        DictationStatus = result.Text;
+        _toastNotificationService.Show("Parakeet (NPU) ready", "Hexagon NPU backend initialized", ToastState.Success, 4200);
+        await RefreshRuntimeDiagnosticsAsync();
+    }
+    catch (Exception exception)
+    {
+        DictationStatus = $"Parakeet NPU test failed: {exception.Message}";
+        _logService.Error("Parakeet NPU readiness test failed.", exception);
+        var noNpu = exception.Message.Contains("NPU", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("QNN", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("ARM64", StringComparison.OrdinalIgnoreCase);
+        var toastTitle = noNpu ? "Parakeet (NPU) needs a Snapdragon NPU" : "Parakeet (NPU) unavailable";
+        _toastNotificationService.Show(toastTitle, exception.Message, ToastState.Error, 6200);
+    }
+}
 private async void DownloadQwenModel_Click(object sender, RoutedEventArgs e)
 {
     var model = Environment.GetEnvironmentVariable("MUESLI_POST_PROCESSOR_MODEL") ?? "Qwen/Qwen2.5-3B-Instruct";
@@ -3648,6 +3689,7 @@ private async Task RefreshRuntimeDiagnosticsAsync()
         GpuRuntimeStatus = "CPU mode";
         QwenRuntimeStatus = "Optional, not installed";
         ParakeetRuntimeStatus = "Optional, not installed";
+        NpuRuntimeStatus = "Not checked";
         DiarizationDependencyStatus = "Optional setup needed";
         DiarizationTokenStatus = "Optional if model access fails";
         _logService.Error("Runtime diagnostics failed.", exception);
@@ -3676,6 +3718,7 @@ private void ApplyRuntimeDiagnostics(RuntimeDiagnostics diagnostics)
     ParakeetRuntimeStatus = parakeetOk
         ? "Ready"
         : noNvidiaGpu ? "Requires NVIDIA GPU" : "Optional, not installed";
+    NpuRuntimeStatus = DescribeNpuStatus(diagnostics.NpuStatus);
     DiarizationDependencyStatus = SpeakerDiarizationStatusLabel;
     DiarizationTokenStatus = hasHfToken ? "Configured" : "Optional if model access fails";
     CanInstallLocalRuntime = !hasPythonOverride && setupScriptAvailable && workerAssetsPresent && (!workerOk || !whisperOk);
@@ -3833,6 +3876,37 @@ private static bool HasReadySignal(string status)
     return status.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
            status.Contains("ready", StringComparison.OrdinalIgnoreCase) ||
            status.Contains("installed", StringComparison.OrdinalIgnoreCase);
+}
+private static string DescribeNpuStatus(string npuStatus)
+{
+    // The worker prints either "No Qualcomm NPU detected" or
+    // "NPU: <tier> | <note>" where tier is verified/elite-untested/plus-untested/unknown.
+    if (string.IsNullOrWhiteSpace(npuStatus) || npuStatus.Contains("Not checked", StringComparison.OrdinalIgnoreCase))
+    {
+        return "Not checked";
+    }
+    if (npuStatus.Contains("No Qualcomm NPU", StringComparison.OrdinalIgnoreCase))
+    {
+        return "Requires Snapdragon NPU";
+    }
+    if (npuStatus.Contains("verified", StringComparison.OrdinalIgnoreCase))
+    {
+        return "Ready (verified)";
+    }
+    if (npuStatus.Contains("elite-untested", StringComparison.OrdinalIgnoreCase))
+    {
+        return "Ready (untested SoC)";
+    }
+    if (npuStatus.Contains("plus-untested", StringComparison.OrdinalIgnoreCase))
+    {
+        return "Untested (Snapdragon X Plus)";
+    }
+    if (npuStatus.Contains("unknown", StringComparison.OrdinalIgnoreCase))
+    {
+        return "NPU present (untested SoC)";
+    }
+    // parakeet_npu import failed / deps missing on this build (e.g. x64).
+    return "Optional, not installed";
 }
 private static string? MapRuntimeSetupProgress(string rawLine)
 {
