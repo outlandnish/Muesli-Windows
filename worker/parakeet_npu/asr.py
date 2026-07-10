@@ -282,15 +282,29 @@ class HexagonParakeet(NemoConformerTdt):
             win_offset_s = start * 160 / config.TARGET_SAMPLE_RATE
             words = self._decode_window_words(buf, valid, win_offset_s)
             # Drop the leading-overlap words this window re-decoded from the previous
-            # one. Do it by TIME, not content: the two windows transcribe the shared
-            # overlap slightly differently (ASR variance at the seam), so exact text
-            # matching under-drops and leaves time-scrambled duplicates. Any new word
-            # that starts at/before the last word we already kept is a re-decode of
-            # already-covered audio -> drop it. (A small back-tolerance guards the
-            # boundary word.)
+            # one. The two windows transcribe the shared ~2 s overlap slightly
+            # differently, so we can't rely on exact text; combine two temporal rules:
+            #  (a) drop any new word starting at/before the last kept word (re-decode
+            #      of already-covered audio, and it would scramble the time order);
+            #  (b) within the overlap region, also drop a new word that repeats a
+            #      just-kept word (same normalized text within ~0.6 s) — this catches
+            #      re-decodes that land a hair later, WITHOUT touching genuine
+            #      disfluencies (which come from a single window, already merged, and
+            #      sit outside the fresh window's leading-overlap span).
             if start > 0 and all_words and words:
                 covered_until = all_words[-1][1] - 0.05
-                words = [w for w in words if w[1] > covered_until]
+                overlap_end_s = win_offset_s + (OVERLAP_MEL * 160 / config.TARGET_SAMPLE_RATE)
+                kept = []
+                for w in words:
+                    if w[1] <= covered_until:
+                        continue
+                    if w[1] < overlap_end_s and all_words:
+                        pw = all_words[-1] if not kept else kept[-1]
+                        same = w[0].lower().strip(".,!?\"'") == pw[0].lower().strip(".,!?\"'")
+                        if same and abs(w[1] - pw[1]) < 0.6:
+                            continue
+                    kept.append(w)
+                words = kept
             all_words.extend(words)
             if valid < WINDOW_MEL:
                 break

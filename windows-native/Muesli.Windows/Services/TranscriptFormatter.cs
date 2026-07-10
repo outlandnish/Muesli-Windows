@@ -56,14 +56,20 @@ public static class TranscriptFormatter
 
         // 3. Tag mic segments as "You" — but drop segments that are just system-audio
         //    bleed/echo (e.g. speakers leaking into an open mic while only a stream
-        //    plays). Such a mic segment substantially overlaps a system segment in
-        //    time AND largely repeats its text; it's not the local speaker, and the
-        //    system-audio diarization already covers that speech as an anonymous
-        //    Speaker N. Without this, a bleed-in speaker gets mislabeled "You".
-        var taggedMic = micSegments
-            .Where(seg => !IsSystemAudioBleed(seg, systemSegments))
-            .Select(seg => new TaggedSegment(seg, "You"))
-            .ToList();
+        //    plays). Segments are word-level, so a single word carries too little
+        //    context to judge echo reliably; instead test each mic word against a
+        //    sliding CONTEXT WINDOW of its neighbouring mic words vs the overlapping
+        //    system text. A word whose local neighbourhood is echoed in the system
+        //    audio is bleed (already covered as an anonymous Speaker N), so drop it.
+        var micOrdered = micSegments.OrderBy(s => s.StartMs).ToList();
+        var taggedMic = new List<TaggedSegment>();
+        for (var i = 0; i < micOrdered.Count; i++)
+        {
+            if (!IsMicWordBleed(micOrdered, i, systemSegments))
+            {
+                taggedMic.Add(new TaggedSegment(micOrdered[i], "You"));
+            }
+        }
 
         // 4. Sort chronologically
         var all = taggedMic.Concat(taggedSystem)
@@ -145,25 +151,31 @@ public static class TranscriptFormatter
         return Math.Max(0, overlapEnd - overlapStart);
     }
 
-    // A mic segment is treated as system-audio bleed/echo (not the local speaker)
-    // when it overlaps a system segment in time by a meaningful fraction AND their
-    // texts largely match. Both signals are required so genuine simultaneous
-    // speech ("You" talking over a remote speaker) is not discarded.
-    private const double BleedTextSimilarity = 0.6;        // >=60% of mic tokens echoed
+    // A mic word is treated as system-audio bleed/echo (not the local speaker) when
+    // its local neighbourhood of mic words is largely echoed in the time-overlapping
+    // system text. Judged over a WINDOW of neighbouring mic words (not the single
+    // word, which carries too little signal), so genuine local speech that only
+    // happens to share a few common words with the stream is not discarded.
+    private const double BleedTextSimilarity = 0.6;   // >=60% of the mic window echoed
+    private const int BleedContextWords = 6;          // +/- neighbour mic words
     // System echo can arrive shifted vs the mic (playback + capture latency), so
-    // widen the mic window when gathering overlapping system text.
+    // widen the time window when gathering overlapping system text.
     private const int BleedTimeToleranceMs = 2000;
 
-    private static bool IsSystemAudioBleed(
-        TranscriptSegment micSeg,
+    private static bool IsMicWordBleed(
+        List<TranscriptSegment> micOrdered,
+        int index,
         List<TranscriptSegment> systemSegments)
     {
-        // Word-level segmentation makes mic and system segments fine-grained and
-        // time-MISALIGNED, so a single system segment rarely overlaps the mic
-        // segment enough on its own. Compare the mic text against the UNION of all
-        // system segments that overlap the mic segment's (tolerance-widened) span.
-        var windowStart = micSeg.StartMs - BleedTimeToleranceMs;
-        var windowEnd = micSeg.EndMs + BleedTimeToleranceMs;
+        // Context window of neighbouring mic words (this word +/- BleedContextWords).
+        var lo = Math.Max(0, index - BleedContextWords);
+        var hi = Math.Min(micOrdered.Count - 1, index + BleedContextWords);
+        var micWindowText = string.Join(" ",
+            micOrdered.Skip(lo).Take(hi - lo + 1).Select(s => s.Text));
+
+        // System text overlapping this window's (tolerance-widened) time span.
+        var windowStart = micOrdered[lo].StartMs - BleedTimeToleranceMs;
+        var windowEnd = micOrdered[hi].EndMs + BleedTimeToleranceMs;
         var overlappingSystemText = string.Join(" ", systemSegments
             .Where(s => CalculateOverlap(windowStart, windowEnd, s.StartMs, s.EndMs) > 0)
             .Select(s => s.Text));
@@ -171,11 +183,8 @@ public static class TranscriptFormatter
         {
             return false;
         }
-        // Use CONTAINMENT (fraction of the mic's tokens present in the system text),
-        // not symmetric Jaccard: the system window is much larger than one mic
-        // phrase, so Jaccard's union denominator would wrongly suppress the score
-        // even when the mic text is fully echoed.
-        return TextContainment(micSeg.Text, overlappingSystemText) >= BleedTextSimilarity;
+        // CONTAINMENT: fraction of the mic window's tokens echoed in the system text.
+        return TextContainment(micWindowText, overlappingSystemText) >= BleedTextSimilarity;
     }
 
     // Fraction of `inner`'s word tokens that also appear in `outer`.
