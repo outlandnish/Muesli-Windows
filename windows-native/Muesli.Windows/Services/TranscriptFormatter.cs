@@ -27,12 +27,32 @@ public static class TranscriptFormatter
             }
         }
 
-        // 2. Assign speaker labels to system transcript segments by time overlap
-        var taggedSystem = systemSegments
-            .Select(seg => new TaggedSegment(
-                seg,
-                FindSpeakerByOverlap(seg, diarizationSegments, speakerLabelMap) ?? "Others"))
-            .ToList();
+        // 2. Assign speaker labels to system transcript segments by time overlap.
+        //    Fine-grained ASR phrases occasionally fall in a brief gap between
+        //    diarization turns (no speaker overlaps them); carry forward the previous
+        //    phrase's speaker so those gaps join the surrounding turn instead of
+        //    fragmenting the transcript with "Others". Falls back to the next matched
+        //    speaker (then "Others") for a leading gap.
+        var taggedSystem = new List<TaggedSegment>();
+        string? carriedSpeaker = null;
+        foreach (var seg in systemSegments.OrderBy(s => s.StartMs))
+        {
+            var matched = FindSpeakerByOverlap(seg, diarizationSegments, speakerLabelMap);
+            if (matched is not null)
+            {
+                carriedSpeaker = matched;
+            }
+            taggedSystem.Add(new TaggedSegment(seg, matched ?? carriedSpeaker ?? "Others"));
+        }
+        // Backfill any leading segments that had no speaker yet (before the first match).
+        var firstKnown = taggedSystem.FirstOrDefault(t => t.Speaker != "Others")?.Speaker;
+        if (firstKnown is not null)
+        {
+            for (var i = 0; i < taggedSystem.Count && taggedSystem[i].Speaker == "Others"; i++)
+            {
+                taggedSystem[i] = taggedSystem[i] with { Speaker = firstKnown };
+            }
+        }
 
         // 3. Tag mic segments as "You" — but drop segments that are just system-audio
         //    bleed/echo (e.g. speakers leaking into an open mic while only a stream

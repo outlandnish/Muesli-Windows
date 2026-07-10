@@ -564,10 +564,12 @@ def _load_wav_16k_mono_scipy(source: Any) -> Any:
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
-def _words_to_segments(words, max_gap_s=0.6, max_words=12):
-    """Group timed words [(word, start_s, end_s), ...] into short phrase segments
-    (break on a pause or every max_words) so the diarized merge can attribute each
-    phrase to a speaker by time overlap. Returns Muesli segment dicts."""
+def _words_to_segments(words, max_gap_s=0.4, max_words=4):
+    """Group timed words [(word, start_s, end_s), ...] into SHORT phrase segments
+    (break on a brief pause or every few words) so the diarized merge can attribute
+    each phrase to a speaker by time overlap. Kept fine-grained so a single phrase
+    rarely straddles a speaker change; the C# merge then re-consolidates consecutive
+    same-speaker phrases into readable turns. Returns Muesli segment dicts."""
     segments = []
     cur = []
     for w, s, e in words:
