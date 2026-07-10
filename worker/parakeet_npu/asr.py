@@ -146,10 +146,6 @@ def _qnn_encoder_session(path):
     return ort.InferenceSession(str(path), sess_options=so)
 
 
-def _norm_word(w):
-    return w.lower().strip(".,!?\"'")
-
-
 def _merge(prev_words, nxt, max_overlap=30):
     """Append nxt's words to prev_words, dropping the overlapping span. Adjacent
     chunks share ~overlap seconds of audio, transcribed slightly differently at
@@ -286,22 +282,15 @@ class HexagonParakeet(NemoConformerTdt):
             win_offset_s = start * 160 / config.TARGET_SAMPLE_RATE
             words = self._decode_window_words(buf, valid, win_offset_s)
             # Drop the leading-overlap words this window re-decoded from the previous
-            # one. Time-thresholding alone misses them (the re-decode lands at slightly
-            # later timestamps), so match by CONTENT: find the largest k where this
-            # window's first k words repeat the tail of what we already have, and skip
-            # them. Overlap is OVERLAP_MEL mel frames (~2 s).
+            # one. Do it by TIME, not content: the two windows transcribe the shared
+            # overlap slightly differently (ASR variance at the seam), so exact text
+            # matching under-drops and leaves time-scrambled duplicates. Any new word
+            # that starts at/before the last word we already kept is a re-decode of
+            # already-covered audio -> drop it. (A small back-tolerance guards the
+            # boundary word.)
             if start > 0 and all_words and words:
-                overlap_s = OVERLAP_MEL * 160 / config.TARGET_SAMPLE_RATE
-                seam = win_offset_s + overlap_s + 0.3  # search a bit past the overlap
-                cand = [i for i, w in enumerate(words) if w[1] < seam]
-                new_head = [_norm_word(w[0]) for w in words]
-                prev_tail = [_norm_word(w[0]) for w in all_words]
-                best_k = 0
-                max_k = min(len(cand) + 2, len(prev_tail), 30)
-                for k in range(1, max_k + 1):
-                    if prev_tail[-k:] == new_head[:k]:
-                        best_k = k
-                words = words[best_k:]
+                covered_until = all_words[-1][1] - 0.05
+                words = [w for w in words if w[1] > covered_until]
             all_words.extend(words)
             if valid < WINDOW_MEL:
                 break
