@@ -8,6 +8,11 @@ __pycache__/
 .venv/
 .venv-worker/
 .cache/
+
+# Self-built sherpa-onnx arm64 wheel for CPU diarization: not on PyPI, too large
+# to commit. Built locally / fetched from a GitHub release; supplied to
+# package-windows-v1.ps1 via -SherpaWheel or MUESLI_SHERPA_WHEEL. Kept out of git.
+worker/wheels/
 bin/
 obj/
 artifacts/

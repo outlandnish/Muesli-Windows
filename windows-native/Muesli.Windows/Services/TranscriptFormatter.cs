@@ -34,8 +34,14 @@ public static class TranscriptFormatter
                 FindSpeakerByOverlap(seg, diarizationSegments, speakerLabelMap) ?? "Others"))
             .ToList();
 
-        // 3. Tag mic segments as "You"
+        // 3. Tag mic segments as "You" — but drop segments that are just system-audio
+        //    bleed/echo (e.g. speakers leaking into an open mic while only a stream
+        //    plays). Such a mic segment substantially overlaps a system segment in
+        //    time AND largely repeats its text; it's not the local speaker, and the
+        //    system-audio diarization already covers that speech as an anonymous
+        //    Speaker N. Without this, a bleed-in speaker gets mislabeled "You".
         var taggedMic = micSegments
+            .Where(seg => !IsSystemAudioBleed(seg, systemSegments))
             .Select(seg => new TaggedSegment(seg, "You"))
             .ToList();
 
@@ -117,6 +123,57 @@ public static class TranscriptFormatter
         var overlapStart = Math.Max(startA, startB);
         var overlapEnd = Math.Min(endA, endB);
         return Math.Max(0, overlapEnd - overlapStart);
+    }
+
+    // A mic segment is treated as system-audio bleed/echo (not the local speaker)
+    // when it overlaps a system segment in time by a meaningful fraction AND their
+    // texts largely match. Both signals are required so genuine simultaneous
+    // speech ("You" talking over a remote speaker) is not discarded.
+    private const double BleedTimeOverlapFraction = 0.5;   // >=50% of mic seg overlaps
+    private const double BleedTextSimilarity = 0.6;        // >=60% token Jaccard
+
+    private static bool IsSystemAudioBleed(
+        TranscriptSegment micSeg,
+        List<TranscriptSegment> systemSegments)
+    {
+        var micDuration = Math.Max(1, micSeg.EndMs - micSeg.StartMs);
+        foreach (var sysSeg in systemSegments)
+        {
+            var overlap = CalculateOverlap(
+                micSeg.StartMs, micSeg.EndMs, sysSeg.StartMs, sysSeg.EndMs);
+            if (overlap / micDuration < BleedTimeOverlapFraction)
+            {
+                continue;
+            }
+            if (TextSimilarity(micSeg.Text, sysSeg.Text) >= BleedTextSimilarity)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Token-set Jaccard similarity: |A ∩ B| / |A ∪ B| over lowercased word tokens.
+    private static double TextSimilarity(string a, string b)
+    {
+        var tokensA = Tokenize(a);
+        var tokensB = Tokenize(b);
+        if (tokensA.Count == 0 || tokensB.Count == 0)
+        {
+            return 0;
+        }
+        var intersection = tokensA.Count(tokensB.Contains);
+        var union = tokensA.Count + tokensB.Count - intersection;
+        return union == 0 ? 0 : (double)intersection / union;
+    }
+
+    private static HashSet<string> Tokenize(string text)
+    {
+        return text
+            .ToLowerInvariant()
+            .Split(new[] { ' ', '\t', '\n', '\r', '.', ',', '!', '?', ';', ':' },
+                StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     private static List<TaggedSegment> Consolidate(List<TaggedSegment> segments, int gapThresholdMs)

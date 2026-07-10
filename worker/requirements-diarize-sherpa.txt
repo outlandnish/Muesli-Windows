@@ -1,0 +1,14 @@
+# Speaker diarization on the ARM64 CPU via sherpa-onnx — Snapdragon X build.
+#
+# HARD REQUIREMENT: a native ARM64 Python (win_arm64). sherpa_onnx is a compiled
+# pybind extension; there is no prebuilt win_arm64 wheel on PyPI, so the wheel is
+# BUILT + BUNDLED with the arm64 package (see setup-worker-runtime.ps1
+# -WithDiarizeSherpa, which pip-installs the bundled sherpa_onnx-*-win_arm64.whl).
+#
+# This runs alongside Parakeet-on-NPU (diarization is CPU; pyannote/torch has no
+# win_arm64 wheel, which is why we use sherpa-onnx here instead).
+#
+# sherpa_onnx is intentionally NOT listed here (no PyPI arm64 wheel); it is
+# installed from the bundled local wheel by the packaging script.
+soundfile
+numpy

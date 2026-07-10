@@ -2806,8 +2806,20 @@ private async void TestDiarization_Click(object sender, RoutedEventArgs e)
     try
     {
         DictationStatus = "Testing diarization model";
-        _toastNotificationService.Show("Testing diarization", "Loading pyannote speaker model", ToastState.Transcribing, 0);
-        var result = await _meetingTranscriptionClient.DownloadModelAsync("diarization", "pyannote/speaker-diarization-3.1");
+        _toastNotificationService.Show("Testing diarization", "Loading speaker model", ToastState.Transcribing, 0);
+        PostProcessingResult result;
+        try
+        {
+            // pyannote backend (x64/CUDA).
+            result = await _meetingTranscriptionClient.DownloadModelAsync("diarization", "pyannote/speaker-diarization-3.1");
+        }
+        catch (Exception pyannoteException)
+        {
+            // pyannote/torch has no win_arm64 wheel; fall back to the sherpa-onnx
+            // CPU backend on Snapdragon/arm64 (same fallback the worker uses).
+            _logService.Info($"pyannote diarization unavailable ({pyannoteException.Message}); trying sherpa-onnx CPU backend.");
+            result = await _meetingTranscriptionClient.DownloadModelAsync("diarize-sherpa", "sherpa-onnx");
+        }
         DictationStatus = result.Text;
         _toastNotificationService.Show("Diarization ready", "Speaker model loaded", ToastState.Success, 3600);
         await RefreshRuntimeDiagnosticsAsync();
