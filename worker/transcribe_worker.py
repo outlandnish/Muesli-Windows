@@ -948,23 +948,29 @@ def fetch_sortformer_diarization_models(cache_dir_path: Path) -> list[str]:
     else:
         logs.append("Sortformer ONNX already present.")
 
-    # The pre-compiled QNN context binary (sortformer.bin) is bundled with the arm64
-    # package under worker\sortformer-bin\. Copy it into the model cache if present,
-    # then (re)generate the tiny EPContext wrapper ORT-QNN needs to load it
-    # (deterministic, safe to regenerate). Without the .bin we run the float ONNX on
-    # the CPU as a fallback.
-    bin_path = out / "sortformer.bin"
-    if not bin_path.is_file():
-        bundled = Path(__file__).resolve().parent / "sortformer-bin" / "sortformer.bin"
-        if bundled.is_file():
-            import shutil
+    # The pre-compiled QNN context binary (sortformer.bin) AND its tiny EPContext
+    # wrapper (sortformer_ctx.onnx) are bundled with the arm64 package under
+    # worker\sortformer-bin\. Copy both into the model cache. The wrapper is shipped
+    # pre-made (like parakeet's encoder-model.onnx) so the runtime needs no `onnx`
+    # package to build it; if only the .bin is present we regenerate the wrapper.
+    # Without the .bin we run the float ONNX on the CPU as a fallback.
+    import shutil
 
-            shutil.copyfile(bundled, bin_path)
-            logs.append(f"Copied bundled Sortformer NPU binary -> {bin_path.name}")
+    bundled_dir = Path(__file__).resolve().parent / "sortformer-bin"
+    bin_path = out / "sortformer.bin"
+    wrap_path = out / "sortformer_ctx.onnx"
+    if not bin_path.is_file() and (bundled_dir / "sortformer.bin").is_file():
+        shutil.copyfile(bundled_dir / "sortformer.bin", bin_path)
+        logs.append(f"Copied bundled Sortformer NPU binary -> {bin_path.name}")
+    if not wrap_path.is_file() and (bundled_dir / "sortformer_ctx.onnx").is_file():
+        shutil.copyfile(bundled_dir / "sortformer_ctx.onnx", wrap_path)
+        logs.append(f"Copied bundled EPContext wrapper -> {wrap_path.name}")
 
     if bin_path.is_file():
-        wrap = sortformer.generate_epcontext_wrapper(cache_dir_path)
-        logs.append(f"NPU context binary present; generated wrapper -> {wrap.name}")
+        if not wrap_path.is_file():
+            wrap = sortformer.generate_epcontext_wrapper(cache_dir_path)
+            logs.append(f"Generated EPContext wrapper -> {wrap.name}")
+        logs.append("NPU context binary present.")
     else:
         logs.append(
             "No QNN context binary (sortformer.bin) present; will run the float "

@@ -150,12 +150,18 @@ if ($pythonArch -eq "arm64") {
     $sortformerBinSrc = $SortformerBin
     if ([string]::IsNullOrWhiteSpace($sortformerBinSrc)) { $sortformerBinSrc = $env:MUESLI_SORTFORMER_BIN }
     if (-not [string]::IsNullOrWhiteSpace($sortformerBinSrc) -and (Test-Path $sortformerBinSrc)) {
-        # Bundle under worker\ (copied into the build); download_model(kind=
-        # "diarize-sortformer-npu") copies it into cache_dir()/diarize-sortformer/ and
-        # generates the EPContext wrapper on first run.
+        # Bundle the .bin AND its pre-made EPContext wrapper under worker\ (copied into
+        # the build); download_model(kind="diarize-sortformer-npu") copies both into
+        # cache_dir()/diarize-sortformer/. Shipping the wrapper pre-made means the
+        # runtime needs no `onnx` package to build it. The wrapper is expected next to
+        # the .bin (sortformer_ctx.onnx); if absent it is generated on first run.
         $sortformerBundleDir = Join-Path $publishDir "worker\sortformer-bin"
         New-Item -ItemType Directory -Force -Path $sortformerBundleDir | Out-Null
         Copy-Item -LiteralPath $sortformerBinSrc -Destination (Join-Path $sortformerBundleDir "sortformer.bin") -Force
+        $sortformerWrapSrc = Join-Path (Split-Path -Parent $sortformerBinSrc) "sortformer_ctx.onnx"
+        if (Test-Path $sortformerWrapSrc) {
+            Copy-Item -LiteralPath $sortformerWrapSrc -Destination (Join-Path $sortformerBundleDir "sortformer_ctx.onnx") -Force
+        }
         Write-Host "Bundled Sortformer NPU context binary from $sortformerBinSrc"
     } else {
         Write-Host "NOTE: no Sortformer NPU binary bundled (pass -SortformerBin or set MUESLI_SORTFORMER_BIN). Diarization will use the sherpa CPU fallback until the .bin is present."

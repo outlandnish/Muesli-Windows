@@ -81,7 +81,11 @@ def generate_epcontext_wrapper(cache_dir: Path) -> Path | None:
     loadable model. Deterministic from the known I/O signature — regenerated whenever
     the .bin is present but the wrapper is missing. Returns the wrapper path, or None
     if no .bin. The context was compiled with --truncate_64bit_io, so its *_lengths
-    I/O are int32."""
+    I/O are int32.
+
+    Needs the `onnx` package. The arm64 bundle ships the wrapper pre-made (so `onnx`
+    isn't required at runtime); this generator is the fallback when only the .bin is
+    present. Raises ImportError if `onnx` is absent and no pre-made wrapper exists."""
     import onnx
     from onnx import helper, TensorProto
 
