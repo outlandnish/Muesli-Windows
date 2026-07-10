@@ -4,7 +4,6 @@ param(
     [switch]$WithParakeetNpu,
     [switch]$WithNpuSummary,
     [switch]$WithDiarization,
-    [switch]$WithDiarizeSherpa,
     [switch]$WithDiarizeSortformerNpu,
     [switch]$CheckOnly
 )
@@ -24,11 +23,7 @@ $parakeetRequirements = Join-Path $appDir "worker\requirements-parakeet.txt"
 $parakeetNpuRequirements = Join-Path $appDir "worker\requirements-parakeet-npu.txt"
 $npuSummaryRequirements = Join-Path $appDir "worker\requirements-npu-summary.txt"
 $diarizationRequirements = Join-Path $appDir "worker\requirements-diarization.txt"
-$diarizeSherpaRequirements = Join-Path $appDir "worker\requirements-diarize-sherpa.txt"
 $diarizeSortformerNpuRequirements = Join-Path $appDir "worker\requirements-diarize-sortformer-npu.txt"
-# The self-built sherpa-onnx arm64 wheel (no PyPI arm64 wheel exists), bundled
-# under worker\wheels\ by package-windows-v1.ps1's arm64 path.
-$sherpaWheelDir = Join-Path $appDir "worker\wheels"
 
 if (-not (Test-Path $requirements)) {
     throw "Could not find worker requirements at $requirements"
@@ -112,27 +107,6 @@ if ($useBundled) {
         }
         & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $diarizationRequirements
         if ($LASTEXITCODE -ne 0) { throw "pip install of diarization requirements failed (exit $LASTEXITCODE)." }
-    }
-
-    if ($WithDiarizeSherpa) {
-        if (-not (Test-Path $diarizeSherpaRequirements)) {
-            throw "Could not find sherpa diarization requirements at $diarizeSherpaRequirements"
-        }
-        # sherpa-onnx ships as an arm64-only self-built wheel; require a native
-        # ARM64 Python (its .pyd can't load under x64/emulation).
-        & $bundledPython -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
-        if ($LASTEXITCODE -ne 0) {
-            throw "The sherpa diarization backend requires a native ARM64 Python (Snapdragon). Bundled python at $bundledPython is not arm64."
-        }
-        # Install the bundled sherpa-onnx arm64 wheel (no PyPI arm64 wheel exists).
-        $sherpaWheel = Get-ChildItem -Path $sherpaWheelDir -Filter "sherpa_onnx-*-win_arm64.whl" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $sherpaWheel) {
-            throw "Bundled sherpa-onnx arm64 wheel not found under $sherpaWheelDir. The arm64 package must ship it."
-        }
-        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget $sherpaWheel.FullName
-        if ($LASTEXITCODE -ne 0) { throw "pip install of bundled sherpa-onnx wheel failed (exit $LASTEXITCODE)." }
-        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $diarizeSherpaRequirements
-        if ($LASTEXITCODE -ne 0) { throw "pip install of sherpa diarization requirements failed (exit $LASTEXITCODE)." }
     }
 
     if ($WithDiarizeSortformerNpu) {
@@ -254,21 +228,16 @@ if ($WithDiarization) {
     & $python -m pip install -r $diarizationRequirements
 }
 
-if ($WithDiarizeSherpa) {
-    if (-not (Test-Path $diarizeSherpaRequirements)) {
-        throw "Could not find sherpa diarization requirements at $diarizeSherpaRequirements"
+if ($WithDiarizeSortformerNpu) {
+    if (-not (Test-Path $diarizeSortformerNpuRequirements)) {
+        throw "Could not find Sortformer NPU diarization requirements at $diarizeSortformerNpuRequirements"
     }
-    # sherpa-onnx is a self-built arm64-only wheel; require a native ARM64 Python.
+    # onnxruntime-qnn ships arm64-only wheels; require a native ARM64 Python.
     & $python -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
     if ($LASTEXITCODE -ne 0) {
-        throw "The sherpa diarization backend requires a native ARM64 Python (Snapdragon). $python is not arm64."
+        throw "The Sortformer NPU diarization backend requires a native ARM64 Python (Snapdragon). $python is not arm64."
     }
-    $sherpaWheel = Get-ChildItem -Path $sherpaWheelDir -Filter "sherpa_onnx-*-win_arm64.whl" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $sherpaWheel) {
-        throw "Bundled sherpa-onnx arm64 wheel not found under $sherpaWheelDir."
-    }
-    & $python -m pip install $sherpaWheel.FullName
-    & $python -m pip install -r $diarizeSherpaRequirements
+    & $python -m pip install -r $diarizeSortformerNpuRequirements
 }
 
 Write-Host "Muesli worker runtime is ready at $python"

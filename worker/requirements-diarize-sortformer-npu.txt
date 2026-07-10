@@ -14,5 +14,5 @@ onnxruntime-qnn
 numpy
 scipy
 huggingface_hub
-# soundfile is used if present (matches the sherpa/pyannote backends) but is
+# soundfile is used if present (matches the pyannote backend) but is
 # optional — the backend falls back to scipy.io.wavfile.

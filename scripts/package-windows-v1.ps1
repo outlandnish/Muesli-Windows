@@ -2,14 +2,10 @@ param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
     [string]$SentryDsn = "",
-    # Path to the self-built sherpa-onnx arm64 wheel to bundle for CPU speaker
-    # diarization (no PyPI arm64 wheel exists). Defaults to worker\wheels\ in the
-    # repo. Only used for -Runtime win-arm64. Env override: MUESLI_SHERPA_WHEEL.
-    [string]$SherpaWheel = "",
     # Path to the pre-compiled Sortformer QNN context binary (sortformer.bin) to
     # bundle for NPU speaker diarization. Only used for -Runtime win-arm64. If unset,
-    # the bundle ships without it and diarization uses the sherpa CPU fallback until
-    # the .bin is added. Env override: MUESLI_SORTFORMER_BIN.
+    # the bundle ships without it and speaker diarization is unavailable until the
+    # .bin is added. Env override: MUESLI_SORTFORMER_BIN.
     [string]$SortformerBin = ""
 )
 
@@ -112,30 +108,6 @@ if ($pythonArch -eq "arm64") {
         if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of $reqName failed (exit $LASTEXITCODE)." }
     }
 
-    # CPU speaker diarization via sherpa-onnx. There is no PyPI win_arm64 wheel, so
-    # we bundle a self-built one under worker\wheels\ and install it here (so the
-    # arm64 bundle ships diarization ready to use, like parakeet-npu above). The
-    # wheel is also kept in the package for setup-worker-runtime.ps1 -WithDiarizeSherpa.
-    $sherpaSrc = $SherpaWheel
-    if ([string]::IsNullOrWhiteSpace($sherpaSrc)) { $sherpaSrc = $env:MUESLI_SHERPA_WHEEL }
-    if ([string]::IsNullOrWhiteSpace($sherpaSrc)) {
-        $repoWheelDir = Join-Path $PSScriptRoot "..\worker\wheels"
-        $found = Get-ChildItem -Path $repoWheelDir -Filter "sherpa_onnx-*-win_arm64.whl" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($found) { $sherpaSrc = $found.FullName }
-    }
-    if ([string]::IsNullOrWhiteSpace($sherpaSrc) -or -not (Test-Path $sherpaSrc)) {
-        throw "sherpa-onnx arm64 wheel not found. Pass -SherpaWheel <path>, set MUESLI_SHERPA_WHEEL, or place sherpa_onnx-*-win_arm64.whl under worker\wheels\."
-    }
-    $bundledWheelDir = Join-Path $publishDir "worker\wheels"
-    New-Item -ItemType Directory -Force -Path $bundledWheelDir | Out-Null
-    Copy-Item -LiteralPath $sherpaSrc -Destination $bundledWheelDir -Force
-    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget $sherpaSrc
-    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of sherpa-onnx wheel failed (exit $LASTEXITCODE)." }
-    $sherpaReq = Join-Path $publishDir "worker\requirements-diarize-sherpa.txt"
-    if (-not (Test-Path $sherpaReq)) { throw "Requirements file missing at $sherpaReq after publish." }
-    & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $sherpaReq
-    if ($LASTEXITCODE -ne 0) { throw "Bundled pip install of requirements-diarize-sherpa.txt failed (exit $LASTEXITCODE)." }
-
     # NPU speaker diarization via NVIDIA Sortformer. Deps are onnxruntime-qnn (already
     # installed above for parakeet-npu) + numpy/scipy/huggingface_hub; install the req
     # explicitly so the bundle ships it ready. The pre-compiled QNN context binary
@@ -164,7 +136,7 @@ if ($pythonArch -eq "arm64") {
         }
         Write-Host "Bundled Sortformer NPU context binary from $sortformerBinSrc"
     } else {
-        Write-Host "NOTE: no Sortformer NPU binary bundled (pass -SortformerBin or set MUESLI_SORTFORMER_BIN). Diarization will use the sherpa CPU fallback until the .bin is present."
+        Write-Host "NOTE: no Sortformer NPU binary bundled (pass -SortformerBin or set MUESLI_SORTFORMER_BIN). Speaker diarization will be unavailable until the .bin is present."
     }
 } else {
     # x64: the shipped baseline — Whisper worker dependencies.
@@ -214,9 +186,9 @@ Optional add-ons (download extra dependencies into the bundled runtime):
       powershell -ExecutionPolicy Bypass -File .\setup-worker-runtime.ps1 -WithParakeet
   - Speaker diarization (pyannote, x64/CUDA):
       powershell -ExecutionPolicy Bypass -File .\setup-worker-runtime.ps1 -WithDiarization
-  - Speaker diarization (sherpa-onnx CPU, Snapdragon/arm64 — pre-installed in the
-    arm64 package; this re-installs from the bundled wheel if needed):
-      powershell -ExecutionPolicy Bypass -File .\setup-worker-runtime.ps1 -WithDiarizeSherpa
+  - Speaker diarization (NVIDIA Sortformer on the Hexagon NPU, Snapdragon/arm64 —
+    pre-installed in the arm64 package):
+      powershell -ExecutionPolicy Bypass -File .\setup-worker-runtime.ps1 -WithDiarizeSortformerNpu
 
 Default shortcut:
   Hold the configured shortcut to dictate. Release it to transcribe and paste into the previously focused app.

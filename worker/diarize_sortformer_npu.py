@@ -7,7 +7,7 @@ parakeet-v3-npu ASR encoder. Falls back to the float ONNX on CPU when no NPU is
 available (both are self-consistent; the loop auto-detects static vs dynamic graph).
 
 transcribe_worker.diarize_audio() prefers this backend on arm64/Snapdragon when the
-NPU is present, ahead of the sherpa-onnx CPU backend.
+NPU is present (the arm64 diarization backend).
 
 Models live under cache_dir()/diarize-sortformer/ (fetched by
 download_model(kind="diarize-sortformer-npu")):

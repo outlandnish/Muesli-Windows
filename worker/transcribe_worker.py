@@ -841,10 +841,9 @@ def diarize_audio(input_path: str) -> dict[str, Any]:
             "warnings": warnings,
         }
     except ModuleNotFoundError as exc:
-        # pyannote.audio / torch has no win_arm64 wheel. On arm64 (Snapdragon)
-        # builds, prefer the Sortformer NPU diarizer (end-to-end, all-on-device,
-        # ~176 ms/chunk on the Hexagon NPU) when its models + an NPU are present;
-        # otherwise fall back to the sherpa-onnx CPU diarizer.
+        # pyannote.audio / torch has no win_arm64 wheel. On arm64 (Snapdragon) builds,
+        # use the Sortformer NPU diarizer (end-to-end, all-on-device, ~176 ms/chunk on
+        # the Hexagon NPU) when its models + an NPU are present.
         try:
             import diarize_sortformer_npu as sortformer
 
@@ -855,22 +854,13 @@ def diarize_audio(input_path: str) -> dict[str, Any]:
                 )
                 return result
         except ModuleNotFoundError:
-            pass  # backend deps (numpy/onnxruntime) absent; try sherpa next
-
-        import diarize_sherpa
-
-        if diarize_sherpa.sherpa_available():
-            result = diarize_sherpa.diarize_audio_sherpa(input_path, cache_dir())
-            result.setdefault("warnings", []).insert(
-                0, f"Diarization: pyannote unavailable ({exc}); using sherpa-onnx (CPU)."
-            )
-            return result
+            pass  # backend deps (numpy/onnxruntime) absent
 
         warnings += [
             "Diarization skipped: pyannote.audio not installed.",
             "On x64: pip install -r requirements-diarization.txt",
-            "On arm64: pip install -r requirements-diarize-sherpa.txt + sherpa wheel,",
-            "  or requirements-diarize-sortformer-npu.txt for NPU diarization.",
+            "On arm64: pip install -r requirements-diarize-sortformer-npu.txt for "
+            "NPU diarization.",
             f"Error: {exc}",
         ]
         return {
@@ -894,53 +884,6 @@ def diarize_audio(input_path: str) -> dict[str, Any]:
         }
 
 
-SHERPA_SEG_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-)
-SHERPA_EMB_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "speaker-recongition-models/"
-    "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
-)
-
-
-def fetch_sherpa_diarization_models(cache_dir_path: Path) -> list[str]:
-    """Download the sherpa CPU diarization models into cache_dir/diarize-sherpa/.
-
-    Returns warning/diagnostic lines. Idempotent: skips files already present.
-    """
-    import tarfile
-    import urllib.request
-
-    import diarize_sherpa
-
-    out = diarize_sherpa.sherpa_model_dir(cache_dir_path)
-    logs: list[str] = []
-    seg = out / "segmentation.onnx"
-    emb = out / "embedding.onnx"
-
-    if not seg.is_file():
-        tar_path = out / "seg.tar.bz2"
-        urllib.request.urlretrieve(SHERPA_SEG_URL, tar_path)
-        with tarfile.open(tar_path, "r:bz2") as tf:
-            member = next(
-                m for m in tf.getmembers() if m.name.endswith("model.onnx")
-            )
-            member.name = "segmentation.onnx"  # flatten into out/
-            tf.extract(member, out)
-        tar_path.unlink(missing_ok=True)
-        logs.append(f"Downloaded segmentation model -> {seg.name}")
-    else:
-        logs.append("Segmentation model already present.")
-
-    if not emb.is_file():
-        urllib.request.urlretrieve(SHERPA_EMB_URL, emb)
-        logs.append(f"Downloaded embedding model -> {emb.name}")
-    else:
-        logs.append("Embedding model already present.")
-
-    return logs
 
 
 # NVIDIA Sortformer streaming diarizer, ONNX export by cgus/Altunenes.
@@ -1080,26 +1023,6 @@ def download_model(kind: str, model: str) -> dict[str, Any]:
             ],
         }
 
-    if kind == "diarize-sherpa":
-        # Sherpa-onnx CPU diarization models for the arm64 build.
-        import diarize_sherpa
-
-        fetched = fetch_sherpa_diarization_models(cache_dir())
-        return {
-            "transcriptText": "Sherpa diarization models are ready.",
-            "detectedLanguage": "en",
-            "durationMs": 0,
-            "segments": [],
-            "warnings": [
-                "Diarization backend: sherpa-onnx / CPU (ARM64)",
-                "Segmentation: sherpa-onnx-pyannote-segmentation-3-0",
-                "Embedding: 3dspeaker eres2net_base_sv 16k",
-                f"Model cache directory: {diarize_sherpa.sherpa_model_dir(cache_dir())}",
-                *fetched,
-                f"Timing model ready ms: {(time.perf_counter() - started_at) * 1000:.1f}",
-            ],
-        }
-
     if kind == "diarize-sortformer-npu":
         # NVIDIA Sortformer end-to-end diarizer for the arm64 / Snapdragon NPU.
         import diarize_sortformer_npu as sortformer
@@ -1205,7 +1128,7 @@ def main() -> int:
     )
     postprocess_parser.add_argument("--system-prompt", default="")
     download_parser = subparsers.add_parser("download-model")
-    download_parser.add_argument("--kind", choices=["whisper", "postprocess", "parakeet", "parakeet-v3-npu", "diarization", "diarize-sherpa"], default="whisper")
+    download_parser.add_argument("--kind", choices=["whisper", "postprocess", "parakeet", "parakeet-v3-npu", "diarization", "diarize-sortformer-npu"], default="whisper")
     download_parser.add_argument("--model", required=True)
     diarize_parser = subparsers.add_parser("diarize")
     diarize_parser.add_argument("--input", required=True)

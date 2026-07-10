@@ -44,12 +44,11 @@ public sealed class RuntimeDiagnosticsService
             + "print((qnn_soc_support()['tier'] + ' | ' + qnn_soc_support()['note']) if qnn_npu_available() else 'No Qualcomm NPU detected')\"",
             TimeSpan.FromSeconds(12));
         // Diarization is available via either backend: pyannote (x64/CUDA) or the
-        // sherpa-onnx CPU backend (arm64/Snapdragon, where pyannote/torch has no
-        // win_arm64 wheel). Report OK if either import stack succeeds.
+        // NVIDIA Sortformer NPU backend (arm64/Snapdragon, where pyannote/torch has
+        // no win_arm64 wheel). Report OK if either import stack succeeds.
         var diarizationCheck = await RunProcessAsync(
             python,
-            "-c \"import soundfile\n"
-            + "try:\n"
+            "-c \"try:\n"
             + "    import numpy as np\n"
             + "    np.NaN = np.nan if not hasattr(np, 'NaN') else np.NaN\n"
             + "    np.NAN = np.nan if not hasattr(np, 'NAN') else np.NAN\n"
@@ -57,8 +56,8 @@ public sealed class RuntimeDiagnosticsService
             + "    import pyannote.audio; import torch\n"
             + "    print('OK - pyannote diarization dependencies installed.')\n"
             + "except ModuleNotFoundError:\n"
-            + "    import sherpa_onnx\n"
-            + "    print('OK - sherpa-onnx CPU diarization dependencies installed.')\"",
+            + "    import numpy, scipy, onnxruntime_qnn\n"
+            + "    print('OK - Sortformer NPU diarization dependencies installed.')\"",
             TimeSpan.FromSeconds(15));
 
         var workerPath = WorkerRuntimeLocator.FindWorkerScriptOrNull();

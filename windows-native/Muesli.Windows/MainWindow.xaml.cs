@@ -2822,10 +2822,10 @@ private async void TestDiarization_Click(object sender, RoutedEventArgs e)
         }
         catch (Exception pyannoteException)
         {
-            // pyannote/torch has no win_arm64 wheel; fall back to the sherpa-onnx
-            // CPU backend on Snapdragon/arm64 (same fallback the worker uses).
-            _logService.Info($"pyannote diarization unavailable ({pyannoteException.Message}); trying sherpa-onnx CPU backend.");
-            result = await _meetingTranscriptionClient.DownloadModelAsync("diarize-sherpa", "sherpa-onnx");
+            // pyannote/torch has no win_arm64 wheel; use the NVIDIA Sortformer NPU
+            // backend on Snapdragon/arm64 (the same backend the worker uses).
+            _logService.Info($"pyannote diarization unavailable ({pyannoteException.Message}); trying Sortformer NPU backend.");
+            result = await _meetingTranscriptionClient.DownloadModelAsync("diarize-sortformer-npu", "sortformer");
         }
         DictationStatus = result.Text;
         _toastNotificationService.Show("Diarization ready", "Speaker model loaded", ToastState.Success, 3600);
