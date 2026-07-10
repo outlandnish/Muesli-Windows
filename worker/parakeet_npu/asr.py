@@ -23,6 +23,9 @@ ENC_IN_FRAMES = config.MEL_FRAMES          # 801, fixed by the .bin
 WINDOW_MEL = 800                           # usable mel frames per window
 OVERLAP_MEL = 200                          # ~2 s overlap between windows
 HOP_MEL = WINDOW_MEL - OVERLAP_MEL          # 600
+# Seconds per encoder frame: mel hop 160 @ 16 kHz, subsampled by MEL_SUBSAMPLE (8).
+# = 8 * 160 / 16000 = 0.08 s — a token's encoder-frame index * this = its time.
+SEC_PER_ENC_FRAME = config.MEL_SUBSAMPLE * 160 / config.TARGET_SAMPLE_RATE
 
 _QNN_EP = "QNNExecutionProvider"
 _qnn_registered = False
@@ -203,6 +206,40 @@ class HexagonParakeet(NemoConformerTdt):
             return ""
         return "".join(self._vocab[i] for i in results[0][0]).replace("▁", " ").strip()
 
+    def _decode_window_words(self, feats_win, valid_mel, win_offset_s):
+        """Like _decode_window but returns [(word, start_s, end_s), ...] with times
+        absolute in the utterance. Uses the transducer's per-token encoder-frame
+        timestamps (results[0][1]); a word's span runs from its first sub-token's
+        time to the next word's start."""
+        enc = self._run_window(feats_win)
+        valid_enc = -(-valid_mel // config.MEL_SUBSAMPLE)
+        enc = enc[:, :, :valid_enc].transpose(0, 2, 1)
+        lens = np.array([enc.shape[1]], dtype=np.int64)
+        results = list(self._decoding(enc.astype(np.float32), lens))
+        if not results:
+            return []
+        tokens, timestamps = results[0][0], results[0][1]
+        # Group sub-word tokens into words. This tokenizer marks a word start with a
+        # LEADING SPACE (not "▁"); skip special <|...|> control tokens.
+        words = []
+        cur, cur_start = "", None
+        for tok, ts in zip(tokens, timestamps):
+            piece = self._vocab[tok]
+            if piece.startswith("<") and piece.endswith(">"):
+                continue  # control token, no text/time
+            t_s = win_offset_s + ts * SEC_PER_ENC_FRAME
+            if piece.startswith(" "):
+                if cur.strip():
+                    words.append([cur.strip(), cur_start, t_s])
+                cur, cur_start = piece, t_s
+            else:
+                if cur_start is None:
+                    cur_start = t_s
+                cur += piece
+        if cur.strip():
+            words.append([cur.strip(), cur_start, None])
+        return words
+
     def recognize_batch(self, waveforms, waveforms_len, /, **kwargs):
         # onnx-asr's base recognize_batch does one _encode -> one _decoding, which
         # our fixed-window encoder can't do. Instead: window the mel features,
@@ -226,6 +263,39 @@ class HexagonParakeet(NemoConformerTdt):
                 start += HOP_MEL
             out.append(TimestampedResult(" ".join(words), None, None, None))
         return iter(out)
+
+    def recognize_words(self, wav, wlen):
+        """Return [(word, start_s, end_s), ...] for one waveform, timed absolute in
+        the utterance. Windows like recognize_batch, but keeps per-word times and
+        drops words falling in a window's leading overlap (already emitted by the
+        previous window) so each word appears once."""
+        feats, _ = self._preprocessor(wav[None], np.array([wlen], np.int64))
+        feats = feats.astype(np.float32)
+        _, n_mels, total = feats.shape
+        all_words, start = [], 0
+        while start < total:
+            win = feats[:, :, start:start + WINDOW_MEL]
+            valid = win.shape[-1]
+            buf = np.zeros((1, n_mels, ENC_IN_FRAMES), dtype=np.float32)
+            buf[:, :, :valid] = win
+            # `start` is a MEL-frame offset; mel hop = 160 samples @ 16 kHz = 0.01 s.
+            win_offset_s = start * 160 / config.TARGET_SAMPLE_RATE
+            words = self._decode_window_words(buf, valid, win_offset_s)
+            # drop words in the leading-overlap region for non-first windows
+            if start > 0 and all_words:
+                last_t = all_words[-1][1]
+                words = [w for w in words if w[1] > last_t + 1e-3]
+            all_words.extend(words)
+            if valid < WINDOW_MEL:
+                break
+            start += HOP_MEL
+        # fill trailing end times (each word ends where the next begins)
+        for i in range(len(all_words) - 1):
+            if all_words[i][2] is None:
+                all_words[i][2] = all_words[i + 1][1]
+        if all_words and all_words[-1][2] is None:
+            all_words[-1][2] = all_words[-1][1] + 0.4
+        return [(w, s, e) for w, s, e in all_words]
 
 
 def _make_preprocessor(name):
@@ -255,3 +325,9 @@ class ParakeetTDT:
         lens = np.array([wav.shape[1]], dtype=np.int64)
         results = list(self.model.recognize_batch(wav, lens))
         return results[0].text if results else ""
+
+    def transcribe_words(self, wav16k: np.ndarray):
+        """Return [(word, start_s, end_s), ...] with per-word timestamps, for
+        speaker-attributed transcripts. Same decode as transcribe(), plus timing."""
+        wav = np.ascontiguousarray(wav16k, dtype=np.float32)[None]
+        return self.model.recognize_words(wav[0], wav.shape[1])

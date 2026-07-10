@@ -564,6 +564,33 @@ def _load_wav_16k_mono_scipy(source: Any) -> Any:
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
+def _words_to_segments(words, max_gap_s=0.6, max_words=12):
+    """Group timed words [(word, start_s, end_s), ...] into short phrase segments
+    (break on a pause or every max_words) so the diarized merge can attribute each
+    phrase to a speaker by time overlap. Returns Muesli segment dicts."""
+    segments = []
+    cur = []
+    for w, s, e in words:
+        if cur:
+            prev_end = cur[-1][2]
+            if s - prev_end > max_gap_s or len(cur) >= max_words:
+                segments.append(cur)
+                cur = []
+        cur.append((w, s, e))
+    if cur:
+        segments.append(cur)
+    out = []
+    for i, grp in enumerate(segments):
+        out.append({
+            "id": f"seg_{i + 1}",
+            "speaker": "Speaker ?",
+            "startMs": int(grp[0][1] * 1000),
+            "endMs": int(grp[-1][2] * 1000),
+            "text": " ".join(w for w, _, _ in grp).strip(),
+        })
+    return out
+
+
 def transcribe_parakeet_npu(
     title: str,
     input_path: str,
@@ -582,7 +609,20 @@ def transcribe_parakeet_npu(
     duration_ms = int(len(wav) / 16000 * 1000)
 
     infer_started_at = time.perf_counter()
-    text = model.transcribe(wav).strip()
+    # Word-level timestamps let the transcript be split by speaker during the diarized
+    # merge (without them the whole utterance is one segment -> one speaker). Fall back
+    # to the plain string if timed decode fails, so dictation is never worse off.
+    try:
+        words = model.transcribe_words(wav)
+    except Exception:
+        words = []
+    if words:
+        text = " ".join(w for w, _, _ in words).strip()
+        segments = _words_to_segments(words)
+    else:
+        text = model.transcribe(wav).strip()
+        segments = [{"id": "seg_1", "speaker": "Speaker ?",
+                     "startMs": 0, "endMs": duration_ms, "text": text}] if text else []
     infer_ms = (time.perf_counter() - infer_started_at) * 1000
     total_ms = (time.perf_counter() - started_at) * 1000
 
@@ -590,15 +630,7 @@ def transcribe_parakeet_npu(
         "transcriptText": text,
         "detectedLanguage": "en",
         "durationMs": duration_ms,
-        "segments": [
-            {
-                "id": "seg_1",
-                "speaker": "Speaker ?",
-                "startMs": 0,
-                "endMs": duration_ms,
-                "text": text,
-            }
-        ] if text else [],
+        "segments": segments,
         "warnings": [
             "Speaker diarization is not enabled yet.",
             "ASR engine: parakeet-v3-npu",
