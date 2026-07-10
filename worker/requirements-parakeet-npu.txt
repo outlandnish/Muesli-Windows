@@ -1,0 +1,10 @@
+# Parakeet on the Qualcomm Hexagon NPU (QNN) — Snapdragon X only.
+#
+# HARD REQUIREMENT: a native ARM64 Python (win_arm64). These are binary wheels
+# with no x64 build; an x64/emulated interpreter cannot load the QNN DLLs
+# (Error 193). See worker/parakeet_npu/MODEL_NOTES.md.
+onnxruntime-qnn
+onnx-asr
+scipy
+numpy
+huggingface_hub

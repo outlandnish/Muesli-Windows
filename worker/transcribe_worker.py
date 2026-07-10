@@ -477,6 +477,146 @@ def transcribe_parakeet(
             f"Timing worker total ms: {total_ms:.1f}",
         ],
     }
+
+
+# --- Parakeet on the Qualcomm Hexagon NPU (QNN) -----------------------------
+# Runs the Parakeet-TDT encoder on the Snapdragon NPU via onnxruntime-qnn. This
+# engine requires a native ARM64 Python with onnxruntime-qnn + onnx-asr; see
+# worker/parakeet_npu/MODEL_NOTES.md. It is a sibling of the CUDA `parakeet-v3`
+# engine, gated on an NPU device instead of an NVIDIA GPU.
+
+def _parakeet_npu_model_root() -> Path:
+    # Model files live under the Muesli model cache alongside the other engines,
+    # unless explicitly overridden (matches parakeet_npu.config's env contract).
+    override = os.environ.get("MUESLI_PARAKEET_NPU_MODEL_DIR")
+    return Path(override) if override else cache_dir() / "parakeet-v3-npu"
+
+
+def has_qnn_npu() -> bool:
+    """True iff onnxruntime-qnn loads and exposes an NPU device. Cheap, cached
+    inside the probe; mirrors has_nvidia_runtime() for the CUDA engine."""
+    try:
+        from parakeet_npu.asr import qnn_npu_available
+    except ModuleNotFoundError:
+        return False
+    return qnn_npu_available()
+
+
+def get_parakeet_npu_model() -> Any:
+    if "parakeet-v3-npu" in PARAKEET_CACHE:
+        return PARAKEET_CACHE["parakeet-v3-npu"]
+
+    from parakeet_npu import config as npu_config
+    from parakeet_npu.asr import ParakeetTDT
+
+    npu_config.set_model_root(_parakeet_npu_model_root())
+    if not npu_config.models_present():
+        raise RuntimeError(
+            "Parakeet NPU model files are not downloaded. Run the "
+            "'parakeet-v3-npu' model download first "
+            f"(expected under {_parakeet_npu_model_root()})."
+        )
+    if not has_qnn_npu():
+        raise RuntimeError(
+            "No Qualcomm NPU (QNN) device detected. The parakeet-v3-npu engine "
+            "requires a Snapdragon X device with a native ARM64 Python and "
+            "onnxruntime-qnn installed."
+        )
+    model = ParakeetTDT()
+    PARAKEET_CACHE["parakeet-v3-npu"] = model
+    return model
+
+
+def _load_wav_16k_mono(input_path: str, audio_base64: str) -> Any:
+    """Return a float32 numpy array at 16 kHz mono from either a WAV path or a
+    base64 WAV blob.
+
+    Prefers faster_whisper's ffmpeg-backed decoder when the base worker deps are
+    installed (handles arbitrary formats/rates robustly), and otherwise falls
+    back to a self-contained scipy WAV decoder so this engine works with only its
+    own declared requirements (scipy + numpy)."""
+    source = io.BytesIO(base64.b64decode(audio_base64)) if audio_base64.strip() else input_path
+    try:
+        from faster_whisper.audio import decode_audio
+
+        return decode_audio(source, sampling_rate=16000)
+    except ModuleNotFoundError:
+        return _load_wav_16k_mono_scipy(source)
+
+
+def _load_wav_16k_mono_scipy(source: Any) -> Any:
+    """Decode a PCM WAV (path or file-like) to float32 mono at 16 kHz using scipy."""
+    import numpy as np
+    from scipy.io import wavfile
+    from scipy.signal import resample_poly
+
+    rate, data = wavfile.read(source)
+    if data.dtype.kind in ("i", "u"):
+        # Integer PCM -> [-1, 1) float32.
+        max_mag = float(np.iinfo(data.dtype).max)
+        data = data.astype(np.float32) / max_mag
+    else:
+        data = data.astype(np.float32)
+    if data.ndim > 1:                       # downmix to mono
+        data = data.mean(axis=1)
+    if rate != 16000:                       # resample to 16 kHz
+        data = resample_poly(data, 16000, rate).astype(np.float32)
+    return np.ascontiguousarray(data, dtype=np.float32)
+
+
+def transcribe_parakeet_npu(
+    title: str,
+    input_path: str,
+    source: str,
+    audio_base64: str,
+) -> dict[str, Any]:
+    from parakeet_npu.asr import qnn_soc_support
+
+    started_at = time.perf_counter()
+    model_started_at = time.perf_counter()
+    model = get_parakeet_npu_model()
+    model_ms = (time.perf_counter() - model_started_at) * 1000
+    soc_support = qnn_soc_support()
+
+    wav = _load_wav_16k_mono(input_path, audio_base64)
+    duration_ms = int(len(wav) / 16000 * 1000)
+
+    infer_started_at = time.perf_counter()
+    text = model.transcribe(wav).strip()
+    infer_ms = (time.perf_counter() - infer_started_at) * 1000
+    total_ms = (time.perf_counter() - started_at) * 1000
+
+    return {
+        "transcriptText": text,
+        "detectedLanguage": "en",
+        "durationMs": duration_ms,
+        "segments": [
+            {
+                "id": "seg_1",
+                "speaker": "Speaker ?",
+                "startMs": 0,
+                "endMs": duration_ms,
+                "text": text,
+            }
+        ] if text else [],
+        "warnings": [
+            "Speaker diarization is not enabled yet.",
+            "ASR engine: parakeet-v3-npu",
+            "ASR backend: Qualcomm Hexagon NPU (QNN)",
+            f"SoC: {soc_support['desc'] or 'unknown'}",
+            f"SoC support tier: {soc_support['tier']}",
+            f"SoC note: {soc_support['note']}",
+            f"Model cache directory: {_parakeet_npu_model_root()}",
+            f"Input path: {input_path}",
+            f"Source: {source}",
+            f"Detected duration ms: {duration_ms}",
+            f"Timing worker model ms: {model_ms:.1f}",
+            f"Timing worker infer ms: {infer_ms:.1f}",
+            f"Timing worker total ms: {total_ms:.1f}",
+        ],
+    }
+
+
 def is_silence_hallucination(text: str, source: str, diagnostics: list[dict[str, Any]]) -> bool:
     if source != "microphone":
         return False
@@ -527,6 +667,12 @@ def transcribe(
             return transcribe_parakeet(title, input_path, source, audio_base64)
         except Exception as exc:
             return mock_transcript(title, source, model_profile, f"Parakeet unavailable: {exc}")
+
+    if asr_engine == "parakeet-v3-npu":
+        try:
+            return transcribe_parakeet_npu(title, input_path, source, audio_base64)
+        except Exception as exc:
+            return mock_transcript(title, source, model_profile, f"Parakeet NPU unavailable: {exc}")
 
     try:
         return transcribe_whisper(
@@ -722,6 +868,26 @@ def download_model(kind: str, model: str) -> dict[str, Any]:
             "warnings": ["Parakeet v3 loaded through NVIDIA NeMo."],
         }
 
+    if kind == "parakeet-v3-npu":
+        from parakeet_npu import config as npu_config
+        from parakeet_npu import fetch_models
+
+        npu_config.set_model_root(_parakeet_npu_model_root())
+        fetch_models.fetch_all()
+        # Warm the session so a missing NPU / bad wheel surfaces here, not later.
+        get_parakeet_npu_model()
+        return {
+            "transcriptText": "Parakeet NPU is ready.",
+            "detectedLanguage": "en",
+            "durationMs": 0,
+            "segments": [],
+            "warnings": [
+                "Parakeet NPU loaded on the Qualcomm Hexagon NPU (QNN).",
+                f"Model cache directory: {_parakeet_npu_model_root()}",
+                f"Timing model ready ms: {(time.perf_counter() - started_at) * 1000:.1f}",
+            ],
+        }
+
     if kind == "postprocess":
         os.environ["MUESLI_ALLOW_MODEL_DOWNLOAD"] = "1"
         get_post_processor(model)
@@ -835,7 +1001,7 @@ def main() -> int:
     )
     postprocess_parser.add_argument("--system-prompt", default="")
     download_parser = subparsers.add_parser("download-model")
-    download_parser.add_argument("--kind", choices=["whisper", "postprocess", "parakeet"], default="whisper")
+    download_parser.add_argument("--kind", choices=["whisper", "postprocess", "parakeet", "parakeet-v3-npu"], default="whisper")
     download_parser.add_argument("--model", required=True)
     subparsers.add_parser("server")
 
