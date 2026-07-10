@@ -564,31 +564,22 @@ def _load_wav_16k_mono_scipy(source: Any) -> Any:
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
-def _words_to_segments(words, max_gap_s=0.4, max_words=4):
-    """Group timed words [(word, start_s, end_s), ...] into SHORT phrase segments
-    (break on a brief pause or every few words) so the diarized merge can attribute
-    each phrase to a speaker by time overlap. Kept fine-grained so a single phrase
-    rarely straddles a speaker change; the C# merge then re-consolidates consecutive
-    same-speaker phrases into readable turns. Returns Muesli segment dicts."""
-    segments = []
-    cur = []
-    for w, s, e in words:
-        if cur:
-            prev_end = cur[-1][2]
-            if s - prev_end > max_gap_s or len(cur) >= max_words:
-                segments.append(cur)
-                cur = []
-        cur.append((w, s, e))
-    if cur:
-        segments.append(cur)
+def _words_to_segments(words):
+    """Emit ONE segment per timed word [(word, start_s, end_s), ...] so the diarized
+    merge assigns a speaker per word — respecting sub-second speaker boundaries and
+    real brief interruptions that phrase-level segments would flatten. The C# merge's
+    Consolidate step regroups consecutive same-speaker words into readable turns.
+    Returns Muesli segment dicts."""
     out = []
-    for i, grp in enumerate(segments):
+    for i, (w, s, e) in enumerate(words):
+        if not w.strip():
+            continue
         out.append({
             "id": f"seg_{i + 1}",
             "speaker": "Speaker ?",
-            "startMs": int(grp[0][1] * 1000),
-            "endMs": int(grp[-1][2] * 1000),
-            "text": " ".join(w for w, _, _ in grp).strip(),
+            "startMs": int(s * 1000),
+            "endMs": int(e * 1000),
+            "text": w.strip(),
         })
     return out
 
