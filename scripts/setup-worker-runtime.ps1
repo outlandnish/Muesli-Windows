@@ -2,6 +2,7 @@ param(
     [switch]$WithPostProcessing,
     [switch]$WithParakeet,
     [switch]$WithParakeetNpu,
+    [switch]$WithNpuSummary,
     [switch]$WithDiarization,
     [switch]$CheckOnly
 )
@@ -19,6 +20,7 @@ $requirements = Join-Path $appDir "worker\requirements.txt"
 $postRequirements = Join-Path $appDir "worker\requirements-postprocess.txt"
 $parakeetRequirements = Join-Path $appDir "worker\requirements-parakeet.txt"
 $parakeetNpuRequirements = Join-Path $appDir "worker\requirements-parakeet-npu.txt"
+$npuSummaryRequirements = Join-Path $appDir "worker\requirements-npu-summary.txt"
 $diarizationRequirements = Join-Path $appDir "worker\requirements-diarization.txt"
 
 if (-not (Test-Path $requirements)) {
@@ -82,6 +84,19 @@ if ($useBundled) {
         }
         & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $parakeetNpuRequirements
         if ($LASTEXITCODE -ne 0) { throw "pip install of Parakeet NPU requirements failed (exit $LASTEXITCODE)." }
+    }
+
+    if ($WithNpuSummary) {
+        if (-not (Test-Path $npuSummaryRequirements)) {
+            throw "Could not find NPU summary requirements at $npuSummaryRequirements"
+        }
+        # GenieX ships arm64-only for Windows-on-ARM; require a native ARM64 bundle.
+        & $bundledPython -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "The NPU summary (GenieX) engine requires a native ARM64 Python (Snapdragon). Bundled python at $bundledPython is not arm64."
+        }
+        & $bundledPython -m pip install --no-warn-script-location --target $siteTarget -r $npuSummaryRequirements
+        if ($LASTEXITCODE -ne 0) { throw "pip install of NPU summary (GenieX) requirements failed (exit $LASTEXITCODE)." }
     }
 
     if ($WithDiarization) {
@@ -177,6 +192,17 @@ if ($WithParakeetNpu) {
         throw "The parakeet-npu engine requires a native ARM64 Python (Snapdragon). $python is not arm64."
     }
     & $python -m pip install -r $parakeetNpuRequirements
+}
+
+if ($WithNpuSummary) {
+    if (-not (Test-Path $npuSummaryRequirements)) {
+        throw "Could not find NPU summary requirements at $npuSummaryRequirements"
+    }
+    & $python -c "import sys, struct; f=open(sys.executable,'rb'); f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]; f.seek(pe+4); raise SystemExit(0 if struct.unpack('<H',f.read(2))[0]==0xAA64 else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The NPU summary (GenieX) engine requires a native ARM64 Python (Snapdragon). $python is not arm64."
+    }
+    & $python -m pip install -r $npuSummaryRequirements
 }
 
 if ($WithDiarization) {

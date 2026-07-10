@@ -13,6 +13,39 @@ public static class MeetingSummaryService
         Timeout = TimeSpan.FromSeconds(90)
     };
 
+    // One managed GenieX server per base URL, reused across summaries. Disposed on
+    // app shutdown via ShutdownGenieX(). A server the user started themselves is
+    // detected and reused (GenieXService never kills an instance it didn't spawn).
+    private static readonly object GenieXGate = new();
+    private static readonly Dictionary<string, GenieXService> GenieXServers = new(StringComparer.OrdinalIgnoreCase);
+
+    private static async Task EnsureGenieXServing(string baseUrl, string model)
+    {
+        GenieXService service;
+        lock (GenieXGate)
+        {
+            if (!GenieXServers.TryGetValue(baseUrl, out service!))
+            {
+                service = new GenieXService(baseUrl);
+                GenieXServers[baseUrl] = service;
+            }
+        }
+        await service.EnsureServingAsync(model);
+    }
+
+    /// <summary>Stop any GenieX servers this app started. Call on app shutdown.</summary>
+    public static void ShutdownGenieX()
+    {
+        lock (GenieXGate)
+        {
+            foreach (var server in GenieXServers.Values)
+            {
+                server.Dispose();
+            }
+            GenieXServers.Clear();
+        }
+    }
+
     private static readonly string[] BuiltIns =
     [
         "Auto",
@@ -201,6 +234,7 @@ public static class MeetingSummaryService
             {
                 "openai" => await SummarizeWithOpenAIAsync(transcript, meetingTitle, settings),
                 "openrouter" => await SummarizeWithOpenRouterAsync(transcript, meetingTitle, settings),
+                "npu" => await SummarizeWithNpuLlmAsync(transcript, meetingTitle, settings),
                 _ => CreateLocalSummary(transcript, meetingTitle, settings)
             };
         }
@@ -322,6 +356,75 @@ public static class MeetingSummaryService
         using var document = JsonDocument.Parse(json);
         var text = ExtractOpenRouterText(document.RootElement);
         return string.IsNullOrWhiteSpace(text) ? CreateSummary(transcript, meetingTitle, EffectiveLocalTemplate(settings, meetingTitle, transcript)) : text.Trim();
+    }
+
+    private static readonly Regex ThinkBlockPattern = new(@"<think>.*?</think>", RegexOptions.Singleline | RegexOptions.Compiled);
+
+    // On-device LLM summary via a local OpenAI-compatible server (GenieX by
+    // default; also works with llama.cpp's llama-server or npurun). This is the
+    // only fully-local *generative* summary path — Muesli's other local summary
+    // is heuristic, not an LLM. Falls back to that heuristic if the server is
+    // unreachable (e.g. `geniex serve` not running).
+    private static async Task<string> SummarizeWithNpuLlmAsync(string transcript, string meetingTitle, MuesliSettings settings)
+    {
+        var baseUrl = string.IsNullOrWhiteSpace(settings.NpuLlmBaseUrl)
+            ? "http://127.0.0.1:18181/v1"
+            : settings.NpuLlmBaseUrl.TrimEnd('/');
+        var model = string.IsNullOrWhiteSpace(settings.NpuLlmModel)
+            ? "unsloth/Qwen3-1.7B-GGUF:Q4_0"
+            : settings.NpuLlmModel;
+
+        // Qwen3 is a "thinking" model; /no_think skips chain-of-thought (harmless
+        // for non-thinking models), and we strip any <think>…</think> that remains.
+        // Ensure a GenieX server is up (start it + pull the model if needed).
+        // If GenieX isn't installed / can't start, fall back to the heuristic
+        // summary rather than surfacing a raw error into the notes.
+        try
+        {
+            await EnsureGenieXServing(baseUrl, model);
+        }
+        catch
+        {
+            return CreateSummary(transcript, meetingTitle, EffectiveLocalTemplate(settings, meetingTitle, transcript));
+        }
+
+        var system = EffectiveSystemPrompt(settings) + " /no_think";
+        var body = new
+        {
+            model,
+            messages = new object[]
+            {
+                new { role = "system", content = system },
+                new { role = "user", content = SummaryUserPrompt(transcript, meetingTitle) }
+            },
+            temperature = 0.3,
+            max_tokens = 2500,
+            stream = false
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/chat/completions");
+        request.Content = JsonContent(body);
+
+        // The first request after an idle period triggers a slow on-device model
+        // reload, so allow more time than the shared HttpClient's default.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        using var response = await Http.SendAsync(request, cts.Token);
+        if (!response.IsSuccessStatusCode)
+        {
+            return CreateSummary(transcript, meetingTitle, EffectiveLocalTemplate(settings, meetingTitle, transcript));
+        }
+
+        var json = await response.Content.ReadAsStringAsync(cts.Token);
+        using var document = JsonDocument.Parse(json);
+        var text = StripThink(ExtractOpenRouterText(document.RootElement));
+        return string.IsNullOrWhiteSpace(text)
+            ? CreateSummary(transcript, meetingTitle, EffectiveLocalTemplate(settings, meetingTitle, transcript))
+            : text.Trim();
+    }
+
+    private static string StripThink(string text)
+    {
+        return string.IsNullOrEmpty(text) ? text : ThinkBlockPattern.Replace(text, "").Trim();
     }
 
     private static StringContent JsonContent<T>(T value)

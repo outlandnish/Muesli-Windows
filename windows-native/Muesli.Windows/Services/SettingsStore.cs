@@ -67,6 +67,11 @@ public sealed record MuesliSettings
     public string OpenAIModel { get; init; } = "gpt-5.4-mini";
     public string OpenRouterApiKey { get; init; } = "";
     public string OpenRouterModel { get; init; } = "stepfun/step-3.5-flash:free";
+    // On-device LLM summary via any local OpenAI-compatible server (GenieX by
+    // default; also works with llama.cpp's llama-server or similar). Base URL
+    // ends at /v1. Model id must match what the server's /v1/models reports.
+    public string NpuLlmBaseUrl { get; init; } = "http://127.0.0.1:18181/v1";
+    public string NpuLlmModel { get; init; } = "unsloth/Qwen3-1.7B-GGUF:Q4_0";
     public string Theme { get; init; } = "dark";
     public string? MicrophoneName { get; init; }
     public double? IndicatorLeft { get; init; }

@@ -62,6 +62,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _openAIModel = "gpt-5.4-mini";
     private string _openRouterApiKey = "";
     private string _openRouterModel = "stepfun/step-3.5-flash:free";
+    private string _npuLlmBaseUrl = "http://127.0.0.1:18181/v1";
+    private string _npuLlmModel = "unsloth/Qwen3-1.7B-GGUF:Q4_0";
     private string _theme = "dark";
     private bool _postProcessingEnabled;
     private bool _enableDoubleTapDictation;
@@ -153,7 +155,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public ObservableCollection<string> PasteBehaviors { get; } = ["active-app", "clipboard"];
     public ObservableCollection<string> IndicatorPositions { get; } = ["Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right", "Custom"];
     public ObservableCollection<string> ThemeOptions { get; } = ["Light", "Dark"];
-    public ObservableCollection<string> SummaryProviders { get; } = ["local", "openai", "openrouter"];
+    public ObservableCollection<string> SummaryProviders { get; } = ["local", "openai", "openrouter", "npu"];
     public ObservableCollection<string> SummaryTemplates { get; } = new(MeetingSummaryService.BuiltInTemplateNames);
     public ICollectionView FilteredDictations { get; }
     public ICollectionView FilteredMeetings { get; }
@@ -727,6 +729,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _openAIModel = string.IsNullOrWhiteSpace(settings.OpenAIModel) ? "gpt-5.4-mini" : settings.OpenAIModel;
         _openRouterApiKey = settings.OpenRouterApiKey;
         _openRouterModel = string.IsNullOrWhiteSpace(settings.OpenRouterModel) ? "stepfun/step-3.5-flash:free" : settings.OpenRouterModel;
+        _npuLlmBaseUrl = string.IsNullOrWhiteSpace(settings.NpuLlmBaseUrl) ? "http://127.0.0.1:18181/v1" : settings.NpuLlmBaseUrl;
+        _npuLlmModel = string.IsNullOrWhiteSpace(settings.NpuLlmModel) ? "unsloth/Qwen3-1.7B-GGUF:Q4_0" : settings.NpuLlmModel;
         _theme = settings.Theme.Equals("light", StringComparison.OrdinalIgnoreCase) ? "light" : "dark";
         _postProcessingEnabled = settings.PostProcessingEnabled;
         _enableDoubleTapDictation = settings.EnableDoubleTapDictation;
@@ -3977,6 +3981,8 @@ private MuesliSettings CurrentSettingsSnapshot()
         OpenAIModel = OpenAIModel,
         OpenRouterApiKey = OpenRouterApiKey,
         OpenRouterModel = OpenRouterModel,
+        NpuLlmBaseUrl = _npuLlmBaseUrl,
+        NpuLlmModel = _npuLlmModel,
         Theme = _theme,
         MicrophoneName = SelectedMicrophone,
         IndicatorLeft = _indicatorLeft,
