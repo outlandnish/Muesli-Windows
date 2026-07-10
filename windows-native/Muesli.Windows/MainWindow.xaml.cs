@@ -2412,6 +2412,13 @@ private async void MeetingAutoStopTimer_Tick(object? sender, EventArgs e)
     {
         return;
     }
+    // Testing/manual-capture escape hatch: keep recording even when no meeting
+    // window is detected (e.g. diarizing a podcast playing in a browser, which
+    // meeting detection never recognizes). Set MUESLI_DISABLE_AUTOSTOP=1.
+    if (string.Equals(Environment.GetEnvironmentVariable("MUESLI_DISABLE_AUTOSTOP"), "1", StringComparison.Ordinal))
+    {
+        return;
+    }
     _logService.Info("Meeting window disappeared; stopping meeting recording automatically.");
     await ToggleMeetingRecordingAsync(null);
 }
